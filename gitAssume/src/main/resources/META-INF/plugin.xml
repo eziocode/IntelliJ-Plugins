@@ -55,12 +55,12 @@
             description="Manage Git assume-unchanged flags" popup="true">
             <add-to-group group-id="Git.ContextMenu" anchor="last" />
             <action id="GitAssume.AssumeUnchanged"
-                class="com.example.gitassume.GitAssumeAction"
+                class="io.github.gitassume.GitAssumeAction"
                 text="Assume Unchanged"
                 description="Mark file(s) as assume-unchanged (Git will ignore changes)">
             </action>
             <action id="GitAssume.NoAssumeUnchanged"
-                class="com.example.gitassume.GitNoAssumeAction"
+                class="io.github.gitassume.GitNoAssumeAction"
                 text="No Assume Unchanged"
                 description="Remove assume-unchanged flag (Git will track changes again)">
             </action>
