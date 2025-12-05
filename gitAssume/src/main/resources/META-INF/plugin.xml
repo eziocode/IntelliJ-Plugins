@@ -1,0 +1,49 @@
+<idea-plugin>
+    <id>com.example.gitassume</id>
+    <name>Git Assume Unchanged</name>
+    <vendor email="support@example.com" url="https://github.com/example/git-assume-plugin">Your Name</vendor>
+
+    <description><![CDATA[
+    <p>Manage Git's assume-unchanged flag directly from the IDE.</p>
+    
+    <p>This plugin adds convenient actions to mark files as "assume-unchanged" or remove that flag, 
+    allowing you to tell Git to temporarily ignore changes to tracked files.</p>
+    
+    <h3>Features:</h3>
+    <ul>
+        <li>Mark single or multiple files as assume-unchanged</li>
+        <li>Remove assume-unchanged flag from files</li>
+        <li>Accessible via Git context menu</li>
+        <li>Automatic Git repository validation</li>
+        <li>Clear success/error notifications</li>
+    </ul>
+    
+    <h3>Usage:</h3>
+    <p>Right-click on any file(s) in the project view → Git → Git Assume → Choose action</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Notification group for Git Assume actions -->
+        <notificationGroup id="Git Assume Notifications" displayType="BALLOON" />
+    </extensions>
+
+    <actions>
+        <group id="GitAssume.Group" text="Git Assume"
+            description="Manage Git assume-unchanged flags" popup="true">
+            <add-to-group group-id="Git.ContextMenu" anchor="last" />
+            <action id="GitAssume.AssumeUnchanged"
+                class="com.example.gitassume.GitAssumeAction"
+                text="Assume Unchanged"
+                description="Mark file(s) as assume-unchanged (Git will ignore changes)">
+            </action>
+            <action id="GitAssume.NoAssumeUnchanged"
+                class="com.example.gitassume.GitNoAssumeAction"
+                text="No Assume Unchanged"
+                description="Remove assume-unchanged flag (Git will track changes again)">
+            </action>
+        </group>
+    </actions>
+</idea-plugin>

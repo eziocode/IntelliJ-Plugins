@@ -1,0 +1,26 @@
+<options>
+  <configurable id="preferences.keymap" configurable_name="Keymap">
+    <option name="assume" path="ActionManager" hit="Assume Unchanged" />
+    <option name="unchanged" path="ActionManager" hit="Assume Unchanged" />
+    <option name="as" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="assume-unchanged" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="changes" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="file" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="git" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="ignore" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="mark" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="s" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="will" path="ActionManager" hit="Mark file(s) as assume-unchanged (Git will ignore changes)" />
+    <option name="assume" path="ActionManager" hit="No Assume Unchanged" />
+    <option name="no" path="ActionManager" hit="No Assume Unchanged" />
+    <option name="unchanged" path="ActionManager" hit="No Assume Unchanged" />
+    <option name="again" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+    <option name="assume-unchanged" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+    <option name="changes" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+    <option name="flag" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+    <option name="git" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+    <option name="remove" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+    <option name="track" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+    <option name="will" path="ActionManager" hit="Remove assume-unchanged flag (Git will track changes again)" />
+  </configurable>
+</options>
