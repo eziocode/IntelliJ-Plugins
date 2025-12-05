@@ -14,8 +14,8 @@ shared.index.file.content.hash.forward.index.shared.index.hashes.IdIndex:2
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinProbablyNothingFunctionShortNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.gr.class.super:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.fun.expression:2
-shared.index.file.content.hash.forward.index.shared.index.hashes.FilenameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KlibMetaFileIndex:2
+shared.index.file.content.hash.forward.index.shared.index.hashes.FilenameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinTypeAliasByExpansionShortNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.base.indices.names.KotlinTopLevelClassLikeDeclarationByPackageShortNameIndex:2
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.method.parameter.types:1
@@ -40,7 +40,7 @@ shared.index.file.content.hash.forward.index.shared.index.hashes.devkit.Extensio
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KotlinJvmModuleAnnotationsIndex:2
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinTopLevelPropertyFqnNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.gr.annot.members:1
-shared.index.file.content.hash.forward.index.base:22059
+shared.index.file.content.hash.forward.index.base:701
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.module.name:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.dom.namespaceKey:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KotlinMetadataFileIndex:2

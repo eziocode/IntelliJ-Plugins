@@ -1,9 +1,9 @@
 <idea-plugin>
   <version>1.0-SNAPSHOT</version>
   <idea-version since-build="232" until-build="252.*" />
-  <id>com.example.gitassume</id>
+  <id>io.github.gitassume</id>
   <name>Git Assume Unchanged</name>
-  <vendor email="support@example.com" url="https://github.com/example/git-assume-plugin">Your Name</vendor>
+  <vendor email="support@github.com" url="https://github.com">Git Assume Plugin</vendor>
   <description><![CDATA[<p>Manage Git's assume-unchanged flag directly from the IDE.</p>
     
     <p>This plugin adds convenient actions to mark files as "assume-unchanged" or remove that flag, 
