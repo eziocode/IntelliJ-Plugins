@@ -3,8 +3,8 @@ plugins {
     id 'org.jetbrains.intellij' version '1.17.2'
 }
 
-group = 'com.example'
-version = '1.0-SNAPSHOT'
+group = 'io.github.gitassume'
+version = '1.0.0'
 
 repositories {
     mavenCentral()

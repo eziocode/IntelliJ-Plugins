@@ -1,6 +1,9 @@
 # Git Assume Unchanged Plugin
 
-Manage Git's assume-unchanged flag directly from IntelliJ IDEA.
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other JetBrains IDEs.
 
 ## Features
 
@@ -9,31 +12,25 @@ Manage Git's assume-unchanged flag directly from IntelliJ IDEA.
 - ✅ **Multi-file Support** - Process single or multiple files at once
 - ✅ **Auto Validation** - Only shows for files in Git repositories
 - ✅ **Smart Notifications** - Success/error messages with details
+- ✅ **All JetBrains IDEs** - Works with IntelliJ IDEA, PyCharm, WebStorm, and more
 
 ## Installation
 
-### Option 1: Automatic Installation (Recommended)
+### From JetBrains Marketplace (Recommended)
 
-**macOS/Linux:**
-```bash
-./install.sh
-```
+1. Open your JetBrains IDE
+2. Go to **Settings/Preferences** → **Plugins**
+3. Click **Marketplace** tab
+4. Search for **"Git Assume Unchanged"**
+5. Click **Install** and restart the IDE
 
-**Windows (PowerShell):**
-```powershell
-.\install.ps1
-```
+### From Disk
 
-Then restart IntelliJ IDEA.
-
-### Option 2: Manual Installation
-
-1. Download `gitAssume-1.0-SNAPSHOT.zip`
-2. Open IntelliJ IDEA
-3. Go to **Settings/Preferences** → **Plugins**
-4. Click the **⚙️ gear icon** → **Install Plugin from Disk...**
-5. Select the downloaded ZIP file
-6. Click **OK** and restart IntelliJ IDEA
+1. Download the latest `gitAssume-1.0.0.zip` from [Releases](https://github.com)
+2. Open your IDE → **Settings/Preferences** → **Plugins**
+3. Click **⚙️** → **Install Plugin from Disk...**
+4. Select the downloaded ZIP file
+5. Restart the IDE
 
 ## Usage
 
@@ -45,11 +42,7 @@ Then restart IntelliJ IDEA.
 
 ### Multi-file Selection
 
-Select multiple files using:
-- **macOS**: `Cmd + Click`
-- **Windows/Linux**: `Ctrl + Click`
-
-Then apply the action to all selected files at once.
+Select multiple files using `Cmd+Click` (macOS) or `Ctrl+Click` (Windows/Linux), then apply the action to all selected files at once.
 
 ## What is "Assume Unchanged"?
 
@@ -63,62 +56,48 @@ Git's `assume-unchanged` flag tells Git to temporarily ignore changes to a track
 
 ## Requirements
 
-- **IntelliJ IDEA**: 2023.2 or later (builds 232-252+)
+- **JetBrains IDE**: IntelliJ IDEA 2023.2+ or any other JetBrains IDE (PyCharm, WebStorm, etc.)
 - **Git**: Must be installed and configured
 - **Java**: 17 or later
 
 ## Compatibility
 
-| IntelliJ Version | Build Range | Status |
-|------------------|-------------|--------|
-| 2023.2+          | 232-252.*   | ✅ Supported |
-| 2025.2+          | 252+        | ✅ Supported |
-
-## Troubleshooting
-
-### Plugin not showing in menu
-- Ensure the file is in a Git repository
-- Check that Git4Idea plugin is enabled
-- Restart IntelliJ IDEA
-
-### "Not compatible" error
-- Update to IntelliJ IDEA 2023.2 or later
-- Rebuild the plugin with updated version range
-
-### Installation script fails
-- Use manual installation method
-- Check IntelliJ IDEA is properly installed
-- Verify file permissions
+| IDE Version | Build Range | Status |
+|-------------|-------------|--------|
+| 2023.2+     | 232-252.*   | ✅ Supported |
+| 2025.2+     | 252+        | ✅ Supported |
 
 ## Building from Source
 
 ```bash
-# Clone or download the source code
+git clone <repository-url>
 cd gitAssume
-
-# Build the plugin
 ./gradlew clean build
-
-# Plugin will be in: build/distributions/gitAssume-1.0-SNAPSHOT.zip
 ```
+
+The plugin will be in `build/distributions/gitAssume-1.0.0.zip`
 
 **Note:** Always use `./gradlew` (not `gradle`) to ensure correct Gradle version.
 
-## Distribution
+## Contributing
 
-To share this plugin with others:
-
-1. **Share the ZIP file**: `gitAssume-1.0-SNAPSHOT.zip`
-2. **Include installation script**: `install.sh` or `install.ps1`
-3. **Include this README**: `README.md`
-
-Users can then install using the automatic script or manual method.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This plugin is provided as-is for use in IntelliJ IDEA.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Support
 
-For issues or questions, refer to the Git documentation:
-- [git update-index documentation](https://git-scm.com/docs/git-update-index)
+For issues or questions:
+- Open an issue on GitHub
+- Refer to [Git update-index documentation](https://git-scm.com/docs/git-update-index)
+
+## Changelog
+
+### Version 1.0.0 (Initial Release)
+- Support for assume-unchanged and no-assume-unchanged operations
+- Multi-file selection support
+- Automatic Git repository validation
+- Success and error notifications
+- Compatible with all JetBrains IDEs

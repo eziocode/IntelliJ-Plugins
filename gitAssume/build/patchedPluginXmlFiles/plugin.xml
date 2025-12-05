@@ -1,29 +1,45 @@
 <idea-plugin>
-  <version>1.0-SNAPSHOT</version>
   <idea-version since-build="232" until-build="252.*" />
   <id>io.github.gitassume</id>
   <name>Git Assume Unchanged</name>
+  <version>1.0.0</version>
   <vendor email="support@github.com" url="https://github.com">Git Assume Plugin</vendor>
-  <description><![CDATA[<p>Manage Git's assume-unchanged flag directly from the IDE.</p>
+  <description><![CDATA[<p>Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA.</p>
     
-    <p>This plugin adds convenient actions to mark files as "assume-unchanged" or remove that flag, 
-    allowing you to tell Git to temporarily ignore changes to tracked files.</p>
+    <p>This plugin provides convenient actions to mark files as "assume-unchanged" or remove that flag, 
+    allowing you to tell Git to temporarily ignore changes to tracked files without modifying .gitignore.</p>
     
-    <h3>Features:</h3>
+    <h3>Features</h3>
     <ul>
         <li>Mark single or multiple files as assume-unchanged</li>
         <li>Remove assume-unchanged flag from files</li>
         <li>Accessible via Git context menu</li>
         <li>Automatic Git repository validation</li>
         <li>Clear success/error notifications</li>
+        <li>Works with all JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm, etc.)</li>
     </ul>
     
-    <h3>Usage:</h3>
-    <p>Right-click on any file(s) in the project view → Git → Git Assume → Choose action</p>]]></description>
+    <h3>Usage</h3>
+    <ol>
+        <li>Right-click on any file(s) in the project view</li>
+        <li>Navigate to <b>Git → Git Assume</b></li>
+        <li>Choose <b>Assume Unchanged</b> or <b>No Assume Unchanged</b></li>
+    </ol>
+    
+    <h3>What is Assume Unchanged?</h3>
+    <p>Git's assume-unchanged flag tells Git to ignore changes to a tracked file in your working directory. 
+    This is useful when you need to modify configuration files locally without committing the changes.</p>]]></description>
+  <change-notes><![CDATA[<h3>Version 1.0.0</h3>
+    <ul>
+        <li>Initial release</li>
+        <li>Support for assume-unchanged and no-assume-unchanged operations</li>
+        <li>Multi-file selection support</li>
+        <li>Automatic Git repository validation</li>
+        <li>Success and error notifications</li>
+    </ul>]]></change-notes>
   <depends>com.intellij.modules.platform</depends>
   <depends>Git4Idea</depends>
   <extensions defaultExtensionNs="com.intellij">
-    <!-- Notification group for Git Assume actions -->
     <notificationGroup id="Git Assume Notifications" displayType="BALLOON" />
   </extensions>
   <actions>

@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.zip
+!gradle/wrapper/*.jar
+
+# Local installation scripts (not needed for marketplace)
+install.sh
+install.ps1
+
+# Compiled class files
+bin/
