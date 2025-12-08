@@ -121,6 +121,8 @@ For issues or questions:
 ### Version 1.1.1
 - Added professional plugin icon/logo
 - Icon displays in plugin manager and marketplace
+- Extended compatibility to support all future IntelliJ IDEA versions
+- Changed vendor name to Aswin
 
 ### Version 1.1.0
 - Initial marketplace release
