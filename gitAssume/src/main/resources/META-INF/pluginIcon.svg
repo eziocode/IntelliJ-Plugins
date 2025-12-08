@@ -1,0 +1,37 @@
+<svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background -->
+    <defs>
+        <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#2C3E50;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#34495E;stop-opacity:1" />
+        </linearGradient>
+    </defs>
+
+    <!-- Rounded rectangle background -->
+    <rect width="40" height="40" rx="8" fill="url(#bgGradient)" />
+
+    <!-- Git branch symbol (Y-shape) -->
+    <g fill="none" stroke="#ECF0F1" stroke-width="2.5" stroke-linecap="round">
+        <!-- Main vertical line -->
+        <line x1="20" y1="28" x2="20" y2="18" />
+        <!-- Left branch -->
+        <line x1="20" y1="18" x2="14" y2="12" />
+        <!-- Right branch -->
+        <line x1="20" y1="18" x2="26" y2="12" />
+        <!-- Branch dots -->
+        <circle cx="14" cy="12" r="2" fill="#ECF0F1" stroke="none" />
+        <circle cx="26" cy="12" r="2" fill="#ECF0F1" stroke="none" />
+        <circle cx="20" cy="28" r="2" fill="#ECF0F1" stroke="none" />
+    </g>
+
+    <!-- Eye with slash (ignore symbol) -->
+    <g opacity="0.9">
+        <!-- Eye outline -->
+        <ellipse cx="20" cy="20" rx="8" ry="5" fill="none" stroke="#E74C3C" stroke-width="1.5" />
+        <!-- Eye center dot -->
+        <circle cx="20" cy="20" r="2" fill="#E74C3C" />
+        <!-- Diagonal slash -->
+        <line x1="14" y1="26" x2="26" y2="14" stroke="#E74C3C" stroke-width="2.5"
+            stroke-linecap="round" />
+    </g>
+</svg>
