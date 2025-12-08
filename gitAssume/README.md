@@ -32,7 +32,7 @@ Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other 
 
 ### From Disk
 
-1. Download the latest `gitAssume-1.0.0.zip` from [Releases](https://github.com)
+1. Download the latest `gitAssume-1.1.1.zip` from [Releases](https://github.com)
 2. Open your IDE → **Settings/Preferences** → **Plugins**
 3. Click **⚙️** → **Install Plugin from Disk...**
 4. Select the downloaded ZIP file
@@ -98,7 +98,7 @@ cd gitAssume
 ./gradlew clean build
 ```
 
-The plugin will be in `build/distributions/gitAssume-1.0.0.zip`
+The plugin will be in `build/distributions/gitAssume-1.1.1.zip`
 
 **Note:** Always use `./gradlew` (not `gradle`) to ensure correct Gradle version.
 
@@ -118,7 +118,17 @@ For issues or questions:
 
 ## Changelog
 
-### Version 1.0.0 (Initial Release)
+### Version 1.1.1
+- Added professional plugin icon/logo
+- Icon displays in plugin manager and marketplace
+
+### Version 1.1.0
+- Initial marketplace release
+- Fixed EDT threading error ("Do not call synchronous repository update in EDT")
+- Works in all Git-related contexts (Project View, Version Control, Changes view)
+- Compatible with IntelliJ IDEA 2023.2+ and all JetBrains IDEs
+
+### Version 1.0.0 (Initial Development)
 - Support for assume-unchanged and no-assume-unchanged operations
 - Multi-file selection support
 - Automatic Git repository validation
