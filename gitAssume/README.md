@@ -1,7 +1,13 @@
 # Git Assume Unchanged Plugin
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+<p align="center">
+  <img src="plugin-logo.png" alt="Git Assume Plugin Logo" width="200"/>
+</p>
+
+<p align="center">
+  <a href="https://github.com"><img src="https://img.shields.io/badge/version-1.1.1-blue.svg" alt="Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+</p>
 
 Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other JetBrains IDEs.
 
