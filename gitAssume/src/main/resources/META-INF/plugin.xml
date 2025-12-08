@@ -37,6 +37,8 @@
     <ul>
         <li>Added professional plugin icon/logo</li>
         <li>Icon displays in plugin manager and marketplace</li>
+        <li>Extended compatibility to support all future IntelliJ IDEA versions</li>
+        <li>Changed vendor name to Aswin</li>
     </ul>
     <h3>Version 1.1.0</h3>
     <ul>
