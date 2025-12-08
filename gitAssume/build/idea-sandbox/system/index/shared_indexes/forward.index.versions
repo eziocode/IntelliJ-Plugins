@@ -37,10 +37,10 @@ shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.k
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.anonymous.baseref:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KotlinJavaScriptMetaFileIndex:2
 shared.index.file.content.hash.forward.index.shared.index.hashes.devkit.ExtensionPointIndex:2
-shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinTopLevelPropertyFqnNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KotlinJvmModuleAnnotationsIndex:2
+shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinTopLevelPropertyFqnNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.gr.annot.members:1
-shared.index.file.content.hash.forward.index.base:-26218
+shared.index.file.content.hash.forward.index.base:-14006
 shared.index.file.content.hash.forward.index.shared.index.hashes.dom.namespaceKey:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.module.name:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KotlinMetadataFileIndex:2
