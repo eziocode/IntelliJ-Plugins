@@ -30,7 +30,7 @@ tasks.withType(JavaCompile) {
 
 patchPluginXml {
     sinceBuild = '232'
-    // No untilBuild - compatible with all future versions
+    untilBuild = '' // Empty = no upper limit, compatible with all future versions
 }
 
 signPlugin {
