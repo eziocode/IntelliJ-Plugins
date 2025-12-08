@@ -54,6 +54,23 @@ Git's `assume-unchanged` flag tells Git to temporarily ignore changes to a track
 
 **Important:** This is a local flag only. It doesn't affect other developers or the repository.
 
+## Known Limitations
+
+### IntelliJ Commit Window
+
+**The assume-unchanged flag works at the Git command-line level but may still show files in IntelliJ's commit window.** This is expected behavior because:
+
+- IntelliJ's VCS integration uses its own file system watchers for change detection
+- The IDE's commit window doesn't respect Git's `assume-unchanged` flag
+- However, `git status` and `git commit` commands will correctly ignore the files
+
+**Workaround:** If you need to prevent files from appearing in the commit window, use `.gitignore` instead. Use `assume-unchanged` when you want to:
+- Keep files tracked in Git
+- Ignore local changes temporarily
+- Work with command-line Git operations
+
+This is a known limitation of all `assume-unchanged` implementations in JetBrains IDEs.
+
 ## Requirements
 
 - **JetBrains IDE**: IntelliJ IDEA 2023.2+ or any other JetBrains IDE (PyCharm, WebStorm, etc.)

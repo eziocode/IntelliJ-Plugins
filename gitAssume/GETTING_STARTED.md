@@ -73,6 +73,15 @@ If this happens, simply reapply the flag using the plugin.
 
 Use `.gitignore` for files that should **never** be tracked. Use `assume-unchanged` for files that are tracked but you want to temporarily ignore changes.
 
+### ⚠️ IntelliJ Commit Window Limitation
+
+**Files may still appear in IntelliJ's commit window even with assume-unchanged flag set.** This is expected because:
+- IntelliJ uses its own change detection system
+- The IDE doesn't respect Git's `assume-unchanged` flag in the UI
+- However, `git status` and command-line Git will correctly ignore these files
+
+**If you need files to not appear in the commit window at all, use `.gitignore` instead.**
+
 ## Common Use Cases
 
 ### 1. Local Configuration Files
