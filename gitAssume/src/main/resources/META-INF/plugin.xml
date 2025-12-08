@@ -1,8 +1,8 @@
 <idea-plugin>
     <id>io.github.gitassume</id>
     <name>Git Assume Unchanged</name>
-    <version>1.1.1</version>
-    <vendor email="aswin2kumarform@gmail.com" url="https://github.com">Aswin</vendor>
+    <version>1.2.0</version>
+    <vendor email="support@github.com" url="https://github.com">Aswin</vendor>
 
     <description><![CDATA[
     <p>Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA.</p>
@@ -33,6 +33,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <h3>Version 1.2.0</h3>
+    <ul>
+        <li>Fixed compatibility issue with IntelliJ IDEA 2025.3+</li>
+        <li>Plugin now supports all future IntelliJ IDEA versions without updates</li>
+        <li>Removed upper version limit for true future-proof compatibility</li>
+    </ul>
     <h3>Version 1.1.1</h3>
     <ul>
         <li>Added professional plugin icon/logo</li>
