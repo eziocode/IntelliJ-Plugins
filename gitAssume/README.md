@@ -32,7 +32,7 @@ Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other 
 
 ### From Disk
 
-1. Download the latest `gitAssume-1.1.1.zip` from [Releases](https://github.com)
+1. Download the latest `gitAssume-1.1.1.zip` from [Releases](https://plugins.jetbrains.com/plugin/29274-git-assume-unchanged/edit/versions)
 2. Open your IDE → **Settings/Preferences** → **Plugins**
 3. Click **⚙️** → **Install Plugin from Disk...**
 4. Select the downloaded ZIP file
