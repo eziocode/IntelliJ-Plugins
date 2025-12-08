@@ -40,7 +40,7 @@ shared.index.file.content.hash.forward.index.shared.index.hashes.devkit.Extensio
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KotlinJvmModuleAnnotationsIndex:2
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinTopLevelPropertyFqnNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.gr.annot.members:1
-shared.index.file.content.hash.forward.index.base:-14006
+shared.index.file.content.hash.forward.index.base:4438
 shared.index.file.content.hash.forward.index.shared.index.hashes.dom.namespaceKey:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.module.name:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.vfilefinder.KotlinMetadataFileIndex:2
@@ -93,8 +93,8 @@ shared.index.file.content.hash.forward.index.shared.index.hashes.gr.method.name:
 shared.index.file.content.hash.forward.index.shared.index.hashes.com.android.tools.idea.model.AndroidManifestIndex:2
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinTopLevelClassByPackageIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.auto.module.name:1
-shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinFullClassNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinFunctionShortNameIndex:1
+shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinFullClassNameIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.org.jetbrains.kotlin.idea.stubindex.KotlinTopLevelExtensionsByReceiverTypeIndex:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.java.method.name:1
 shared.index.file.content.hash.forward.index.shared.index.hashes.dom.elementClass:1
