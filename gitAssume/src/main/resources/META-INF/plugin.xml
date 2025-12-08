@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>io.github.gitassume</id>
     <name>Git Assume Unchanged</name>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <vendor email="support@github.com" url="https://github.com">Git Assume Plugin</vendor>
 
     <description><![CDATA[
@@ -33,6 +33,16 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <h3>Version 1.1.0</h3>
+    <ul>
+        <li>Initial marketplace release</li>
+        <li>Support for assume-unchanged and no-assume-unchanged operations</li>
+        <li>Multi-file selection support</li>
+        <li>Automatic Git repository validation</li>
+        <li>Success and error notifications</li>
+        <li>Works in all Git-related contexts (Project View, Version Control, Changes view)</li>
+        <li>Compatible with IntelliJ IDEA 2023.2+ and all JetBrains IDEs</li>
+    </ul>
     <h3>Version 1.0.0</h3>
     <ul>
         <li>Initial release</li>
@@ -53,7 +63,9 @@
     <actions>
         <group id="GitAssume.Group" text="Git Assume"
             description="Manage Git assume-unchanged flags" popup="true">
+            <!-- Only add to Git.ContextMenu - this appears everywhere Git is shown -->
             <add-to-group group-id="Git.ContextMenu" anchor="last" />
+
             <action id="GitAssume.AssumeUnchanged"
                 class="io.github.gitassume.GitAssumeAction"
                 text="Assume Unchanged"

@@ -119,22 +119,6 @@ public abstract class BaseGitAssumeAction extends AnAction {
         }
     }
 
-    @Override
-    public void update(@NotNull AnActionEvent e) {
-        Project project = e.getProject();
-        VirtualFile[] files = e.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY);
-
-        // Enable action only if:
-        // 1. Project is available
-        // 2. At least one file is selected
-        // 3. At least one selected file is in a Git repository
-        boolean isEnabled = project != null && files != null && files.length > 0 &&
-                Arrays.stream(files).anyMatch(file -> !file.isDirectory() &&
-                        GitRepositoryManager.getInstance(project).getRepositoryForFile(file) != null);
-
-        e.getPresentation().setEnabledAndVisible(isEnabled);
-    }
-
     private static class CommandResult {
         final boolean success;
         final String error;
