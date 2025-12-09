@@ -51,11 +51,15 @@ public class GitAssumeErrorReporter extends ErrorReportSubmitter {
                 ? events[0].getThrowable().getClass().getSimpleName() 
                 : "Plugin Error");
         
-        String body = "## Error Report\n\n" +
-                "**Plugin Version:** 1.3.0\n\n" +
-                errorReport.toString() +
-                "\n\n---\n" +
-                "*This error was reported automatically from IntelliJ IDEA*";
+        String body = """
+                ## Error Report
+                
+                **Plugin Version:** 1.3.0
+                
+                %s
+                
+                ---
+                *This error was reported automatically from IntelliJ IDEA*""".formatted(errorReport.toString());
 
         try {
             String encodedTitle = URLEncoder.encode(title, "UTF-8");
