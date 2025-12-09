@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>io.github.gitassume</id>
     <name>Git Assume Unchanged</name>
-    <version>1.2.1</version>
+    <version>1.3.0</version>
     <vendor email="support@github.com" url="https://github.com">Aswin</vendor>
 
     <description><![CDATA[
@@ -33,6 +33,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <h3>Version 1.3.0</h3>
+    <ul>
+        <li>Added error reporter - Report plugin errors directly to GitHub from IDE</li>
+        <li>Enabled "Report and Clear All" button in error dialog</li>
+        <li>Automatic error report generation with stack traces</li>
+    </ul>
     <h3>Version 1.2.1</h3>
     <ul>
         <li>Fixed EDT threading error that occurred on every action</li>
@@ -66,6 +72,7 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup id="Git Assume Notifications" displayType="BALLOON" />
+        <errorHandler implementation="io.github.gitassume.GitAssumeErrorReporter" />
     </extensions>
 
     <actions>

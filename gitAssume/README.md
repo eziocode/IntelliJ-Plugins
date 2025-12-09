@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com"><img src="https://img.shields.io/badge/version-1.2.1-blue.svg" alt="Version"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/version-1.3.0-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </p>
 
@@ -32,7 +32,7 @@ Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other 
 
 ### From Disk
 
-1. Download the latest `gitAssume-1.2.1.zip` from [Releases](https://plugins.jetbrains.com/plugin/29274-git-assume-unchanged/edit/versions)
+1. Download the latest `gitAssume-1.3.0.zip` from [Releases](https://plugins.jetbrains.com/plugin/29274-git-assume-unchanged/edit/versions)
 2. Open your IDE → **Settings/Preferences** → **Plugins**
 3. Click **⚙️** → **Install Plugin from Disk...**
 4. Select the downloaded ZIP file
@@ -98,7 +98,7 @@ cd gitAssume
 ./gradlew clean build
 ```
 
-The plugin will be in `build/distributions/gitAssume-1.2.1.zip`
+The plugin will be in `build/distributions/gitAssume-1.3.0.zip`
 
 **Note:** Always use `./gradlew` (not `gradle`) to ensure correct Gradle version.
 
@@ -117,6 +117,11 @@ For issues or questions:
 - Refer to [Git update-index documentation](https://git-scm.com/docs/git-update-index)
 
 ## Changelog
+
+### Version 1.3.0
+- Added error reporter - Report plugin errors directly to GitHub from IDE
+- Enabled "Report and Clear All" button in error dialog
+- Automatic error report generation with stack traces
 
 ### Version 1.2.1
 - Fixed EDT threading error that occurred on every action
