@@ -14,6 +14,9 @@ import com.intellij.notification.NotificationType;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.CommonDataKeys;
+import com.intellij.openapi.progress.ProgressIndicator;
+import com.intellij.openapi.progress.ProgressManager;
+import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 
@@ -51,72 +54,78 @@ public abstract class BaseGitAssumeAction extends AnAction {
             return;
         }
 
-        // Validate that files are in a Git repository
-        GitRepositoryManager gitRepositoryManager = GitRepositoryManager.getInstance(project);
-        List<VirtualFile> validFiles = Arrays.stream(files)
-                .filter(file -> !file.isDirectory() && gitRepositoryManager.getRepositoryForFile(file) != null)
-                .collect(Collectors.toList());
+        // Run Git repository operations in background thread to avoid EDT issues
+        ProgressManager.getInstance().run(new Task.Backgroundable(project, getActionName(), false) {
+            @Override
+            public void run(@NotNull ProgressIndicator indicator) {
+                // Validate that files are in a Git repository
+                GitRepositoryManager gitRepositoryManager = GitRepositoryManager.getInstance(project);
+                List<VirtualFile> validFiles = Arrays.stream(files)
+                        .filter(file -> !file.isDirectory() && gitRepositoryManager.getRepositoryForFile(file) != null)
+                        .collect(Collectors.toList());
 
-        if (validFiles.isEmpty()) {
-            showNotification(
-                    project,
-                    "No Valid Files",
-                    "Selected files are not in a Git repository or are directories.",
-                    NotificationType.WARNING);
-            return;
-        }
+                if (validFiles.isEmpty()) {
+                    showNotification(
+                            project,
+                            "No Valid Files",
+                            "Selected files are not in a Git repository or are directories.",
+                            NotificationType.WARNING);
+                    return;
+                }
 
-        // Process files grouped by repository
-        Map<GitRepository, List<VirtualFile>> filesByRepo = new HashMap<>();
-        for (VirtualFile file : validFiles) {
-            GitRepository repository = gitRepositoryManager.getRepositoryForFile(file);
-            if (repository != null) {
-                filesByRepo.computeIfAbsent(repository, k -> new ArrayList<>()).add(file);
-            }
-        }
+                // Process files grouped by repository
+                Map<GitRepository, List<VirtualFile>> filesByRepo = new HashMap<>();
+                for (VirtualFile file : validFiles) {
+                    GitRepository repository = gitRepositoryManager.getRepositoryForFile(file);
+                    if (repository != null) {
+                        filesByRepo.computeIfAbsent(repository, k -> new ArrayList<>()).add(file);
+                    }
+                }
 
-        int successCount = 0;
-        int failureCount = 0;
-        List<String> errors = new ArrayList<>();
+                int successCount = 0;
+                int failureCount = 0;
+                List<String> errors = new ArrayList<>();
 
-        for (Map.Entry<GitRepository, List<VirtualFile>> entry : filesByRepo.entrySet()) {
-            GitRepository repository = entry.getKey();
-            List<VirtualFile> repoFiles = entry.getValue();
+                for (Map.Entry<GitRepository, List<VirtualFile>> entry : filesByRepo.entrySet()) {
+                    GitRepository repository = entry.getKey();
+                    List<VirtualFile> repoFiles = entry.getValue();
 
-            for (VirtualFile file : repoFiles) {
-                CommandResult result = runGitCommand(project, repository, file);
-                if (result.success) {
-                    successCount++;
+                    for (VirtualFile file : repoFiles) {
+                        CommandResult result = runGitCommand(project, repository, file);
+                        if (result.success) {
+                            successCount++;
+                        } else {
+                            failureCount++;
+                            errors.add(file.getName() + ": " + result.error);
+                        }
+                    }
+                }
+
+                // Show result notification
+                if (failureCount == 0) {
+                    String message;
+                    if (successCount == 1) {
+                        message = "Successfully applied " + getActionName() + " to " + validFiles.get(0).getName();
+                    } else {
+                        message = "Successfully applied " + getActionName() + " to " + successCount + " file(s)";
+                    }
+                    showNotification(project, getActionName(), message, NotificationType.INFORMATION);
+                } else if (successCount == 0) {
+                    showNotification(
+                            project,
+                            getActionName() + " Failed",
+                            "Failed to process " + failureCount + " file(s):\n" + String.join("\n", errors),
+                            NotificationType.ERROR);
                 } else {
-                    failureCount++;
-                    errors.add(file.getName() + ": " + result.error);
+                    showNotification(
+                            project,
+                            getActionName() + " Partial Success",
+                            "Processed " + successCount + " file(s) successfully, " + failureCount + " failed:\n"
+                                    + String.join("\n", errors),
+                            NotificationType.WARNING);
                 }
             }
-        }
-
-        // Show result notification
-        if (failureCount == 0) {
-            String message;
-            if (successCount == 1) {
-                message = "Successfully applied " + getActionName() + " to " + validFiles.get(0).getName();
-            } else {
-                message = "Successfully applied " + getActionName() + " to " + successCount + " file(s)";
-            }
-            showNotification(project, getActionName(), message, NotificationType.INFORMATION);
-        } else if (successCount == 0) {
-            showNotification(
-                    project,
-                    getActionName() + " Failed",
-                    "Failed to process " + failureCount + " file(s):\n" + String.join("\n", errors),
-                    NotificationType.ERROR);
-        } else {
-            showNotification(
-                    project,
-                    getActionName() + " Partial Success",
-                    "Processed " + successCount + " file(s) successfully, " + failureCount + " failed:\n"
-                            + String.join("\n", errors),
-                    NotificationType.WARNING);
-        }
+        });
     }
 
     private static class CommandResult {
