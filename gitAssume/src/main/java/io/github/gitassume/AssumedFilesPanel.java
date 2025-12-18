@@ -2,27 +2,21 @@ package io.github.gitassume;
 
 import java.awt.BorderLayout;
 import java.awt.Dimension;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.HierarchyEvent;
-import java.awt.event.HierarchyListener;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
-import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JTable;
 import javax.swing.ListSelectionModel;
 import javax.swing.table.AbstractTableModel;
 
-import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.NotNull; // Unused, removing in next pass or here if possible. Actually statusLabel is JBLabel. JLabel is unused.
 
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.progress.ProgressIndicator;
@@ -90,19 +84,9 @@ public class AssumedFilesPanel extends JPanel {
         add(buttonPanel, BorderLayout.SOUTH);
 
         // Add button actions
-        refreshButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                loadAssumedFiles();
-            }
-        });
+        refreshButton.addActionListener(e -> loadAssumedFiles());
 
-        unassumeButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                unassumeSelectedFiles();
-            }
-        });
+        unassumeButton.addActionListener(e -> unassumeSelectedFiles());
 
         // Initial button state
         updateButtonState();
@@ -115,13 +99,10 @@ public class AssumedFilesPanel extends JPanel {
         });
 
         // Auto-refresh when the panel becomes visible (e.g., when the tool window tab is clicked or focused)
-        addHierarchyListener(new HierarchyListener() {
-            @Override
-            public void hierarchyChanged(HierarchyEvent e) {
-                if ((e.getChangeFlags() & (HierarchyEvent.SHOWING_CHANGED | HierarchyEvent.DISPLAYABILITY_CHANGED)) != 0) {
-                    if (isShowing()) {
-                        loadAssumedFiles();
-                    }
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & (HierarchyEvent.SHOWING_CHANGED | HierarchyEvent.DISPLAYABILITY_CHANGED)) != 0) {
+                if (isShowing()) {
+                    loadAssumedFiles();
                 }
             }
         });
@@ -135,7 +116,7 @@ public class AssumedFilesPanel extends JPanel {
     /**
      * Loads all assumed unchanged files from all Git repositories in the project.
      */
-    public void loadAssumedFiles() {
+    public final void loadAssumedFiles() {
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Loading Assumed Files", false) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
@@ -162,12 +143,10 @@ public class AssumedFilesPanel extends JPanel {
     }
 
     private void updateStatusLabel(int fileCount) {
-        if (fileCount == 0) {
-            statusLabel.setText("No assumed unchanged files");
-        } else if (fileCount == 1) {
-            statusLabel.setText("1 file");
-        } else {
-            statusLabel.setText(fileCount + " files");
+        switch (fileCount) {
+            case 0 -> statusLabel.setText("No assumed unchanged files");
+            case 1 -> statusLabel.setText("1 file");
+            default -> statusLabel.setText(fileCount + " files");
         }
     }
 
