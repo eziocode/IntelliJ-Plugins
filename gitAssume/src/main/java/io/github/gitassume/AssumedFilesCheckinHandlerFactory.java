@@ -46,12 +46,6 @@ public class AssumedFilesCheckinHandlerFactory extends VcsCheckinHandlerFactory 
                 }
 
                 @Override
-                @SuppressWarnings("deprecation")
-                public void refresh() {
-                    assumedFilesPanel.loadAssumedFiles();
-                }
-
-                @Override
                 public void saveState() {
                     // No state to save
                 }
