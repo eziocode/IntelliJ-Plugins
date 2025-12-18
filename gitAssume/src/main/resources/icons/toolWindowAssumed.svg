@@ -1,17 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-    <!-- Main file body with Material shadow-like depth -->
-    <path fill="#7A7E8A"
-        d="M3,2 C2.44,2 2,2.44 2,3 L2,13 C2,13.56 2.44,14 3,14 L13,14 C13.56,14 14,13.56 14,13 L14,6 L10,2 L3,2 Z" />
+    <!-- Modern, rounded file silhouette in a technical gray -->
+    <!-- Simplified shape for high clarity at small sizes -->
+    <path fill="#7E8691"
+        d="M3.5,1.5 C2.67,1.5 2,2.17 2,3 L2,13 C2,13.83 2.67,14.5 3.5,14.5 L12.5,14.5 C13.33,14.5 14,13.83 14,13 L14,5 L10.5,1.5 L3.5,1.5 Z" />
 
-    <!-- Paper fold (dog-ear) with slight highlight -->
-    <path fill="#A9ABB2" d="M14,6 L10,6 L10,2 L14,6 Z" />
+    <!-- Subtle fold area for depth without "old" textures -->
+    <path fill="#AFB5BD" d="M14,5 L11.5,5 C10.95,5 10.5,4.55 10.5,4 L10.5,1.5 L14,5 Z" />
 
-    <!-- The "hidden/ignored" eye icon - very Material Design -->
-    <!-- Outer circle/eye shape -->
-    <path fill="#FFFFFF"
-        d="M8,7.5 C6.34,7.5 4.88,8.38 4,9.75 C4.88,11.12 6.34,12 8,12 C9.66,12 11.12,11.12 12,9.75 C11.12,8.38 9.66,7.5 8,7.5 Z M8,11.25 C7.17,11.25 6.5,10.58 6.5,9.75 C6.5,8.92 7.17,8.25 8,8.25 C8.83,8.25 9.5,8.92 9.5,9.75 C9.5,10.58 8.83,11.25 8,11.25 Z" />
-
-    <!-- Stripe/Cross-out line to indicate "ignored/assumed" -->
-    <rect x="3.5" y="9.25" width="9" height="1" fill="#3592C4" transform="rotate(-45 8 9.75)"
-        rx="0.5" />
+    <!-- "Ghost/Visibility-off" symbol representing 'assumed' (ignored) state -->
+    <!-- Vibrant Blue accent for a modern look -->
+    <path fill="#3592C4"
+        d="M8,7 C6.34,7 4.88,7.88 4,9.25 C4.88,10.62 6.34,11.5 8,11.5 C9.66,11.5 11.12,10.62 12,9.25 C11.12,7.88 9.66,7 8,7 Z M8,10.5 C7.17,10.5 6.5,9.83 6.5,9 C6.5,8.17 7.17,7.5 8,7.5 C8.83,7.5 9.5,8.17 9.5,9 C9.5,9.83 8.83,10.5 8,10.5 Z" />
+    <rect x="3.5" y="8.75" width="9" height="0.75" fill="#3592C4" transform="rotate(-45 8 9.25)"
+        rx="0.375" />
 </svg>

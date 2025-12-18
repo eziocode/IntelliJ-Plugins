@@ -114,12 +114,14 @@ public class AssumedFilesPanel extends JPanel {
             }
         });
 
-        // Auto-refresh when the panel becomes visible (e.g., when the tool window tab is clicked)
+        // Auto-refresh when the panel becomes visible (e.g., when the tool window tab is clicked or focused)
         addHierarchyListener(new HierarchyListener() {
             @Override
             public void hierarchyChanged(HierarchyEvent e) {
-                if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing()) {
-                    loadAssumedFiles();
+                if ((e.getChangeFlags() & (HierarchyEvent.SHOWING_CHANGED | HierarchyEvent.DISPLAYABILITY_CHANGED)) != 0) {
+                    if (isShowing()) {
+                        loadAssumedFiles();
+                    }
                 }
             }
         });
