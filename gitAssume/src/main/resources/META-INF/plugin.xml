@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>io.github.gitassume</id>
     <name>Git Assume Unchanged</name>
-    <version>1.3.0</version>
+    <version>2.0.0</version>
     <vendor email="support@github.com" url="https://github.com">Aswin</vendor>
 
     <description><![CDATA[
@@ -12,9 +12,12 @@
     
     <h3>Features</h3>
     <ul>
+        <li><b>Assumed Files Tab</b> - View all assume-unchanged files in commit dialog</li>
+        <li>Unassume multiple files at once from commit dialog</li>
         <li>Mark single or multiple files as assume-unchanged</li>
         <li>Remove assume-unchanged flag from files</li>
         <li>Accessible via Git context menu</li>
+        <li>Multi-repository support</li>
         <li>Automatic Git repository validation</li>
         <li>Clear success/error notifications</li>
         <li>Works with all JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm, etc.)</li>
@@ -33,6 +36,16 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <h3>Version 2.0.0 - Major Update! 🎉</h3>
+    <ul>
+        <li><b>NEW: Assumed Files Tool Window</b> - Dedicated panel in left sidebar to view and manage all assume-unchanged files</li>
+        <li>View all assumed files across all repositories at a glance</li>
+        <li>Bulk unassume: Select and unassume multiple files at once</li>
+        <li>Auto-refresh on window open</li>
+        <li>Multi-repository support with repository indicators</li>
+        <li>Custom icon that works with all IDE themes</li>
+        <li>Improved error reporting with shorter URLs</li>
+    </ul>
     <h3>Version 1.3.0</h3>
     <ul>
         <li>Added error reporter - Report plugin errors directly to GitHub from IDE</li>
@@ -73,6 +86,13 @@
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup id="Git Assume Notifications" displayType="BALLOON" />
         <errorHandler implementation="io.github.gitassume.GitAssumeErrorReporter" />
+        <vcsCheckinHandlerFactory
+            implementation="io.github.gitassume.AssumedFilesCheckinHandlerFactory" />
+        <toolWindow id="Assumed Files"
+            factoryClass="io.github.gitassume.AssumedFilesToolWindow"
+            icon="/icons/toolWindowAssumed.svg"
+            anchor="left"
+            secondary="false" />
     </extensions>
 
     <actions>

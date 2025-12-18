@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com"><img src="https://img.shields.io/badge/version-1.3.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </p>
 
@@ -13,9 +13,12 @@ Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other 
 
 ## Features
 
+- 🆕 **Assumed Files Tool Window** - Dedicated panel to view and manage all assumed unchanged files
 - ✅ **Assume Unchanged** - Tell Git to ignore changes to tracked files
 - ✅ **No Assume Unchanged** - Resume tracking changes to files
 - ✅ **Multi-file Support** - Process single or multiple files at once
+- ✅ **Bulk Unassume** - Unassume multiple files at once from the tool window
+- ✅ **Multi-Repository Support** - Works seamlessly across multiple Git repositories
 - ✅ **Auto Validation** - Only shows for files in Git repositories
 - ✅ **Smart Notifications** - Success/error messages with details
 - ✅ **All JetBrains IDEs** - Works with IntelliJ IDEA, PyCharm, WebStorm, and more
@@ -32,7 +35,7 @@ Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other 
 
 ### From Disk
 
-1. Download the latest `gitAssume-1.3.0.zip` from [Releases](https://plugins.jetbrains.com/plugin/29274-git-assume-unchanged/edit/versions)
+1. Download the latest `gitAssume-2.0.0.zip` from [Releases](https://plugins.jetbrains.com/plugin/29274-git-assume-unchanged/edit/versions)
 2. Open your IDE → **Settings/Preferences** → **Plugins**
 3. Click **⚙️** → **Install Plugin from Disk...**
 4. Select the downloaded ZIP file
@@ -40,15 +43,25 @@ Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other 
 
 ## Usage
 
+### Method 1: Context Menu (Quick Actions)
+
 1. Right-click on any file(s) in the Project view
 2. Navigate to **Git** → **Git Assume**
 3. Choose an action:
    - **Assume Unchanged** - Git will ignore changes
    - **No Assume Unchanged** - Git will track changes again
 
-### Multi-file Selection
+**Multi-file Selection**: Select multiple files using `Cmd+Click` (macOS) or `Ctrl+Click` (Windows/Linux), then apply the action to all selected files at once.
 
-Select multiple files using `Cmd+Click` (macOS) or `Ctrl+Click` (Windows/Linux), then apply the action to all selected files at once.
+### Method 2: Assumed Files Tool Window (Recommended)
+
+1. Open the **Assumed Files** tool window from the left sidebar
+2. View all files currently marked as assume-unchanged
+3. Select one or more files in the table
+4. Click **"Unassume Selected"** to remove the flag from selected files
+5. Click **"Refresh"** to update the list if needed
+
+The tool window shows files from all Git repositories in your project with columns for file name, path, and repository.
 
 ## What is "Assume Unchanged"?
 
@@ -98,7 +111,7 @@ cd gitAssume
 ./gradlew clean build
 ```
 
-The plugin will be in `build/distributions/gitAssume-1.3.0.zip`
+The plugin will be in `build/distributions/gitAssume-2.0.0.zip`
 
 **Note:** Always use `./gradlew` (not `gradle`) to ensure correct Gradle version.
 
@@ -118,10 +131,19 @@ For issues or questions:
 
 ## Changelog
 
+### Version 2.0.0 (Current)
+- 🎉 **New Feature**: Assumed Files tool window in left sidebar
+- View all assume-unchanged files at a glance
+- Unassume multiple files directly from the tool window
+- Multi-repository support
+- Auto-refresh on window open
+- Dedicated icon and default visibility
+
 ### Version 1.3.0
 - Added error reporter - Report plugin errors directly to GitHub from IDE
 - Enabled "Report and Clear All" button in error dialog
 - Automatic error report generation with stack traces
+- Fixed error reporter URL length issues
 
 ### Version 1.2.1
 - Fixed EDT threading error that occurred on every action

@@ -176,7 +176,7 @@ public abstract class BaseGitAssumeAction extends AnAction {
         }
     }
 
-    private void showNotification(Project project, String title, String content, NotificationType type) {
+    public static void showNotification(Project project, String title, String content, NotificationType type) {
         NotificationGroupManager.getInstance()
                 .getNotificationGroup("Git Assume Notifications")
                 .createNotification(title, content, type)

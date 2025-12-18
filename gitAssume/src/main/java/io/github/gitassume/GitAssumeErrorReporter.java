@@ -31,19 +31,31 @@ public class GitAssumeErrorReporter extends ErrorReportSubmitter {
             @NotNull Component parentComponent,
             @NotNull Consumer<? super SubmittedReportInfo> consumer) {
 
-        // Build error report
+        // Build error report - keep it short to avoid URL length issues
         StringBuilder errorReport = new StringBuilder();
         
         for (IdeaLoggingEvent event : events) {
             if (event.getThrowable() != null) {
-                errorReport.append("**Error Message:**\n");
-                errorReport.append(event.getThrowableText()).append("\n\n");
+                errorReport.append("**Error:** ").append(event.getThrowable().getClass().getSimpleName()).append("\n");
+                
+                // Only include the first line of the error message
+                String message = event.getThrowable().getMessage();
+                if (message != null && !message.isEmpty()) {
+                    String firstLine = message.split("\\n")[0];
+                    if (firstLine.length() > 200) {
+                        firstLine = firstLine.substring(0, 200) + "...";
+                    }
+                    errorReport.append("**Message:** ").append(firstLine).append("\n");
+                }
+                break; // Only include first error to keep URL short
             }
         }
 
         if (additionalInfo != null && !additionalInfo.isEmpty()) {
-            errorReport.append("**Additional Information:**\n");
-            errorReport.append(additionalInfo).append("\n\n");
+            String truncatedInfo = additionalInfo.length() > 300 
+                ? additionalInfo.substring(0, 300) + "..." 
+                : additionalInfo;
+            errorReport.append("\n**Additional Info:** ").append(truncatedInfo);
         }
 
         // Create GitHub issue URL
@@ -54,13 +66,21 @@ public class GitAssumeErrorReporter extends ErrorReportSubmitter {
         String body = """
                 ## Error Report
                 
-                **Plugin Version:** 1.3.0
+                **Plugin Version:** 2.0.0
                 
+                ### Error Details
                 %s
                 
+                > **Note:** Full stack trace was truncated to fit URL limits.
+                > Please provide additional details about what you were doing when this error occurred.
+                
                 ---
-                *This error was reported automatically from IntelliJ IDEA*
-                """.formatted(errorReport.toString());
+                *This error was reported automatically from IntelliJ IDEA*""".formatted(errorReport.toString());
+
+        // Limit body length to avoid URL length issues (GitHub has ~8KB limit)
+        if (body.length() > 1500) {
+            body = body.substring(0, 1500) + "...\n\n*[Stack trace truncated]*";
+        }
 
         try {
             String encodedTitle = URLEncoder.encode(title, "UTF-8");

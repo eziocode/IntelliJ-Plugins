@@ -26,6 +26,19 @@ The plugin is already installed if you're reading this! If not:
 
 ### 2. Using the Plugin
 
+There are two ways to use this plugin:
+
+#### A. Assumed Files Tool Window (Recommended)
+
+1. Open the **Assumed Files** tool window from the **left sidebar**
+2. View all files currently marked as assume-unchanged
+3. Select files and click **"Unassume Selected"** to remove the flag
+4. Use **"Refresh"** button to update the list
+
+This is the easiest way to manage all your assumed files in one place!
+
+#### B. Context Menu (Quick Actions)
+
 **To ignore changes to a file:**
 
 1. Right-click on any file in the Project view
@@ -115,6 +128,12 @@ Keep your IDE customizations without affecting the team.
 Test with the flag enabled locally without committing.
 
 ## Checking Assume-Unchanged Files
+
+### Using the Tool Window (Easiest)
+
+Simply open the **Assumed Files** tool window from the right sidebar to see all files!
+
+### Using Command Line
 
 To see which files have the assume-unchanged flag:
 
