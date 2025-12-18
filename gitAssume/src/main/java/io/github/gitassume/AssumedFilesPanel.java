@@ -75,11 +75,11 @@ public class AssumedFilesPanel extends JPanel {
         buttonPanel.setLayout(new BoxLayout(buttonPanel, BoxLayout.X_AXIS));
         buttonPanel.setBorder(JBUI.Borders.empty(5, 0, 0, 0));
 
-        buttonPanel.add(statusLabel);
-        buttonPanel.add(Box.createHorizontalGlue());
         buttonPanel.add(refreshButton);
         buttonPanel.add(Box.createRigidArea(new Dimension(5, 0)));
         buttonPanel.add(unassumeButton);
+        buttonPanel.add(Box.createHorizontalGlue());
+        buttonPanel.add(statusLabel);
 
         add(buttonPanel, BorderLayout.SOUTH);
 
