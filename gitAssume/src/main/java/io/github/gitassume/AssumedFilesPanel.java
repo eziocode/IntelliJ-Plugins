@@ -27,6 +27,7 @@ import com.intellij.diff.requests.SimpleDiffRequest;
 import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.DefaultActionGroup;
+import com.intellij.openapi.actionSystem.impl.SimpleDataContext;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.progress.ProgressIndicator;
@@ -284,7 +285,8 @@ public class AssumedFilesPanel extends JPanel {
         });
 
         ListPopup popup = JBPopupFactory.getInstance()
-                .createActionGroupPopup(null, actionGroup, null, 
+                .createActionGroupPopup(null, actionGroup, 
+                        SimpleDataContext.getProjectContext(project), 
                         JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, true);
         popup.show(new RelativePoint(e));
     }
