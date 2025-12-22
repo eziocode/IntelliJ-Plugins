@@ -36,6 +36,15 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <h3>Version 2.1.0 - Enhanced File Interaction 🎯</h3>
+    <ul>
+        <li><b>NEW: Double-Click to Open</b> - Double-click any file in the Assumed Files tool window to open it in the editor</li>
+        <li><b>NEW: Context Menu</b> - Right-click files to access "Open File" and "Show Diff" options</li>
+        <li>Quick file access improves workflow efficiency</li>
+        <li>Diff view shows current file state</li>
+        <li>No deprecated API usage - fully compatible with latest IntelliJ Platform</li>
+        <li><b>Bug Fix:</b> Fixed NullPointerException in context menu</li>
+    </ul>
     <h3>Version 2.0.0 - Major Update! 🎉</h3>
     <ul>
         <li><b>NEW: Assumed Files Tool Window</b> - Dedicated panel in left sidebar to view and manage all assume-unchanged files</li>

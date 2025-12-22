@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com"><img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com"><img src="https://img.shields.io/badge/version-2.1.0-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </p>
 
@@ -14,6 +14,8 @@ Easily manage Git's assume-unchanged flag directly from IntelliJ IDEA and other 
 ## Features
 
 - 🆕 **Assumed Files Tool Window** - Dedicated panel to view and manage all assumed unchanged files
+- 🖱️ **Double-Click to Open** - Double-click files in tool window to open in editor
+- 📋 **Context Menu** - Right-click for "Open File" and "Show Diff" options
 - ✅ **Assume Unchanged** - Tell Git to ignore changes to tracked files
 - ✅ **No Assume Unchanged** - Resume tracking changes to files
 - ✅ **Multi-file Support** - Process single or multiple files at once
@@ -131,7 +133,15 @@ For issues or questions:
 
 ## Changelog
 
-### Version 2.0.0 (Current)
+### Version 2.1.0 (Current)
+- 🎯 **New Feature**: Double-click to open files from tool window
+- Right-click context menu with "Open File" and "Show Diff" options
+- Quick file access improves workflow efficiency
+- Diff viewer to compare file states
+- Bug fix: Fixed NullPointerException in context menu
+- No deprecated API usage
+
+### Version 2.0.0
 - 🎉 **New Feature**: Assumed Files tool window in left sidebar
 - View all assume-unchanged files at a glance
 - Unassume multiple files directly from the tool window
