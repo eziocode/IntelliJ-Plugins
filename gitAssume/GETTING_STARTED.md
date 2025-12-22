@@ -28,12 +28,16 @@ The plugin is already installed if you're reading this! If not:
 
 There are two ways to use this plugin:
 
-#### A. Assumed Files Tool Window (Recommended)
+#### A. Assumed Files Tool Window (Recommended) 🆕
 
 1. Open the **Assumed Files** tool window from the **left sidebar**
 2. View all files currently marked as assume-unchanged
-3. Select files and click **"Unassume Selected"** to remove the flag
-4. Use **"Refresh"** button to update the list
+3. **NEW in v2.1:** **Double-click** any file to open it in the editor
+4. **NEW in v2.1:** **Right-click** for context menu with:
+   - **Open File** - Opens the file in editor
+   - **Show Diff** - Shows current file state in diff viewer
+5. Select files and click **"Unassume Selected"** to remove the flag
+6. Use **"Refresh"** button to update the list
 
 This is the easiest way to manage all your assumed files in one place!
 
@@ -63,6 +67,20 @@ You can process multiple files at once:
 2. Right-click → **Git** → **Git Assume**
 3. Choose your action
 4. ✅ All selected files will be processed
+
+### 4. Quick File Access (v2.1.0) 🎯
+
+The Assumed Files tool window now supports quick file access:
+
+**Double-Click to Open:**
+- Simply double-click any file in the list to open it in the editor
+- Perfect for quickly reviewing and editing assumed files
+
+**Right-Click Context Menu:**
+- Right-click any file to see options:
+  - **Open File**: Opens the file in the editor
+  - **Show Diff**: Opens diff viewer to see file changes
+- The diff viewer helps you review what changes you've made to assumed files
 
 ## Important Notes
 
