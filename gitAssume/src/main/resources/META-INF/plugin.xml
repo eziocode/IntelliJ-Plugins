@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>io.github.gitassume</id>
     <name>Git Assume Unchanged</name>
-    <version>2.1</version>
+    <version>2.1.1</version>
     <vendor email="support@github.com" url="https://github.com">Aswin</vendor>
 
     <description><![CDATA[
@@ -36,6 +36,13 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <h3>Version 2.1.1 - Stable Release 🚀</h3>
+    <ul>
+        <li><b>NEW: Unassume from Context Menu</b> - Right-click files in Assumed Files tool window to unassume them directly</li>
+        <li>Enhanced right-click menu with "Unassume File" option</li>
+        <li>Improved workflow efficiency for managing assumed files</li>
+        <li>Verified compatibility with latest IntelliJ Platform versions</li>
+    </ul>
     <h3>Version 2.1.0 - Enhanced File Interaction 🎯</h3>
     <ul>
         <li><b>NEW: Double-Click to Open</b> - Double-click any file in the Assumed Files tool window to open it in the editor</li>

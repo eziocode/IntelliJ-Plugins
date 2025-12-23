@@ -32,11 +32,12 @@ There are two ways to use this plugin:
 
 1. Open the **Assumed Files** tool window from the **left sidebar**
 2. View all files currently marked as assume-unchanged
-3. **NEW in v2.1:** **Double-click** any file to open it in the editor
-4. **NEW in v2.1:** **Right-click** for context menu with:
+3. **NEW in v2.1.1:** **Double-click** any file to open it in the editor
+4. **NEW in v2.1.1:** **Right-click** for context menu with:
    - **Open File** - Opens the file in editor
    - **Show Diff** - Shows current file state in diff viewer
-5. Select files and click **"Unassume Selected"** to remove the flag
+   - **Unassume File** - Removes the assume-unchanged flag from the file
+5. Select files and click **"Unassume Selected"** to remove the flag from multiple files
 6. Use **"Refresh"** button to update the list
 
 This is the easiest way to manage all your assumed files in one place!
@@ -68,7 +69,7 @@ You can process multiple files at once:
 3. Choose your action
 4. ✅ All selected files will be processed
 
-### 4. Quick File Access (v2.1.0) 🎯
+### 4. Quick File Access (v2.1.1) 🎯
 
 The Assumed Files tool window now supports quick file access:
 
@@ -80,7 +81,8 @@ The Assumed Files tool window now supports quick file access:
 - Right-click any file to see options:
   - **Open File**: Opens the file in the editor
   - **Show Diff**: Opens diff viewer to see file changes
-- The diff viewer helps you review what changes you've made to assumed files
+  - **Unassume File**: Removes the assume-unchanged flag from the file
+- Context menu provides quick access to common actions without using the toolbar buttons
 
 ## Important Notes
 

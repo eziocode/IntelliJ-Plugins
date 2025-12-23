@@ -66,7 +66,7 @@ public class GitAssumeErrorReporter extends ErrorReportSubmitter {
         String body = """
                 ## Error Report
                 
-                **Plugin Version:** 2.1.0
+                **Plugin Version:** 2.1.1
                 
                 ### Error Details
                 %s
