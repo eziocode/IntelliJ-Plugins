@@ -150,7 +150,7 @@ public class AssumedFilesPanel extends JPanel {
      * Loads all assumed unchanged files from all Git repositories in the project.
      */
     public final void loadAssumedFiles() {
-        ProgressManager.getInstance().run(new Task.Backgroundable(project, "Loading Assumed Files", false) {
+        ProgressManager.getInstance().run(new Task.Backgroundable(project, "Loading assumed files", false) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
                 GitRepositoryManager repoManager = GitRepositoryManager.getInstance(project);
@@ -281,6 +281,14 @@ public class AssumedFilesPanel extends JPanel {
             @Override
             public void actionPerformed(@NotNull AnActionEvent event) {
                 showFileDiff(pair.file, pair.repository);
+            }
+        });
+
+        // Unassume File action
+        actionGroup.add(new AnAction("Unassume File") {
+            @Override
+            public void actionPerformed(@NotNull AnActionEvent event) {
+                unassumeSelectedFiles();
             }
         });
 
