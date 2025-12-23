@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com"><img src="https://img.shields.io/badge/version-2.1.1-blue.svg" alt="Version"></a>
+  <a href="https://plugins.jetbrains.com/plugin/29274-git-assume-unchanged/edit/versions" target="_blank"><img src="https://img.shields.io/badge/version-2.1.1-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
 </p>
 
