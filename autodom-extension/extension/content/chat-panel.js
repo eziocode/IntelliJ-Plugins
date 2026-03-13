@@ -31,8 +31,36 @@
   const STYLE_ID = "__autodom_chat_style";
   const INLINE_OVERLAY_ID = "__autodom_inline_overlay";
 
-  const _log = (...args) => console.log("[AutoDOM Chat]", ...args);
-  const _err = (...args) => console.error("[AutoDOM Chat]", ...args);
+  // Declared early so _log/_err closures can reference it without TDZ issues
+  let _contextInvalidated = false;
+
+  const _log = (...args) => {
+    if (_contextInvalidated) return;
+    console.log("[AutoDOM Chat]", ...args);
+  };
+  const _err = (...args) => {
+    if (_contextInvalidated) return;
+    const joined = args
+      .map((arg) => {
+        if (typeof arg === "string") return arg;
+        if (arg && typeof arg.message === "string") return arg.message;
+        try {
+          return String(arg);
+        } catch (_) {
+          return "";
+        }
+      })
+      .join(" ");
+    if (
+      joined.includes("Extension context invalidated") ||
+      joined.includes("Extension context was invalidated") ||
+      joined.includes("message port closed") ||
+      joined.includes("Receiving end does not exist")
+    ) {
+      return;
+    }
+    console.error("[AutoDOM Chat]", ...args);
+  };
 
   _log("Content script loading...");
 
@@ -53,7 +81,6 @@
   let isProcessing = false;
   let inlineMode = false; // inline overlay mode (like browser atlas)
   let _statusPollInterval = null;
-  let _contextInvalidated = false;
 
   // ─── Inject Styles ─────────────────────────────────────────
   const style = document.createElement("style");
@@ -1054,6 +1081,87 @@
       pointer-events: auto;
     }
 
+    /* ─── Confirmation Prompt (Guardrails) ─────────────────── */
+    .autodom-chat-msg.confirm-prompt {
+      align-self: flex-start;
+      background: linear-gradient(135deg, rgba(30, 25, 15, 0.95), rgba(45, 35, 18, 0.85));
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      color: #e2e8f0;
+      border-radius: 14px;
+      border-bottom-left-radius: 4px;
+      padding: 14px 16px;
+      max-width: 92%;
+      animation: __autodom_msg_appear 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .confirm-prompt-icon {
+      font-size: 20px;
+      margin-bottom: 6px;
+    }
+    .confirm-prompt-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fbbf24;
+      margin-bottom: 6px;
+      letter-spacing: -0.1px;
+    }
+    .confirm-prompt-reason {
+      font-size: 12px;
+      color: #cbd5e1;
+      line-height: 1.55;
+      margin-bottom: 8px;
+    }
+    .confirm-prompt-details {
+      font-size: 10px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      color: #64748b;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 4px 8px;
+      border-radius: 6px;
+      margin-bottom: 12px;
+    }
+    .confirm-prompt-buttons {
+      display: flex;
+      gap: 8px;
+    }
+    .confirm-prompt-btn {
+      flex: 1;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+    }
+    .confirm-prompt-btn.confirm {
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(34, 197, 94, 0.25);
+    }
+    .confirm-prompt-btn.confirm:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(34, 197, 94, 0.35);
+    }
+    .confirm-prompt-btn.cancel {
+      background: rgba(239, 68, 68, 0.12);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    .confirm-prompt-btn.cancel:hover {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.35);
+    }
+    .confirm-prompt-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+    }
+    .confirm-prompt-btn:active {
+      transform: scale(0.97);
+    }
+
     /* Responsive: narrow screens */
     @media (max-width: 480px) {
       #${PANEL_ID} {
@@ -1399,15 +1507,23 @@
 
   function _handleContextInvalidated() {
     if (_contextInvalidated) return;
+    const wasOpen = isOpen;
+    const wasInline = inlineMode;
     _contextInvalidated = true;
-    _log("Extension context invalidated — cleaning up stale content script.");
     if (_statusPollInterval) {
       clearInterval(_statusPollInterval);
       _statusPollInterval = null;
     }
-    // Close panel/overlay gracefully
-    if (isOpen) closePanel();
-    if (inlineMode) closeInlineOverlay();
+    // Close panel/overlay gracefully without invoking logging paths after invalidation
+    if (wasOpen) {
+      isOpen = false;
+      panel.classList.remove("open");
+    }
+    if (wasInline) {
+      inlineMode = false;
+      inlineBackdrop.classList.remove("visible");
+      inlineOverlay.classList.remove("visible");
+    }
     // Remove injected DOM so the fresh content script can re-inject
     try {
       const p = document.getElementById(PANEL_ID);
@@ -1425,19 +1541,35 @@
     if (_contextInvalidated) return Promise.resolve(false);
     return new Promise((resolve) => {
       try {
-        if (
-          !chrome.runtime ||
-          !chrome.runtime.sendMessage ||
-          !chrome.runtime.id
-        ) {
+        const runtime = chrome && chrome.runtime;
+        if (!runtime || !runtime.sendMessage || !runtime.id) {
           _handleContextInvalidated();
           resolve(false);
           return;
         }
-        chrome.runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
-          if (chrome.runtime.lastError) {
-            const msg = chrome.runtime.lastError.message || "";
-            if (msg.includes("Extension context invalidated")) {
+        runtime.sendMessage({ type: "GET_STATUS" }, (response) => {
+          if (_contextInvalidated) {
+            resolve(false);
+            return;
+          }
+
+          let lastError = null;
+          try {
+            lastError = runtime.lastError;
+          } catch (_) {
+            _handleContextInvalidated();
+            resolve(false);
+            return;
+          }
+
+          if (lastError) {
+            const msg = lastError.message || "";
+            if (
+              msg.includes("Extension context invalidated") ||
+              msg.includes("Extension context was invalidated") ||
+              msg.includes("message port closed") ||
+              msg.includes("Receiving end does not exist")
+            ) {
               _handleContextInvalidated();
               resolve(false);
               return;
@@ -1461,15 +1593,19 @@
           resolve(connected);
         });
       } catch (err) {
+        const msg = (err && err.message) || String(err || "");
         if (
-          err.message &&
-          err.message.includes("Extension context invalidated")
+          msg.includes("Extension context invalidated") ||
+          msg.includes("Extension context was invalidated") ||
+          msg.includes("message port closed") ||
+          msg.includes("Receiving end does not exist")
         ) {
           _handleContextInvalidated();
-        } else {
-          _err("checkConnectionStatus: exception:", err.message);
-          setConnectionStatus(false);
+          resolve(false);
+          return;
         }
+        _err("checkConnectionStatus: exception:", msg);
+        setConnectionStatus(false);
         resolve(false);
       }
     });
@@ -1566,7 +1702,15 @@
       const reqId = ++requestIdCounter;
 
       try {
-        chrome.runtime.sendMessage(
+        const runtime = chrome && chrome.runtime;
+        if (!runtime || !runtime.sendMessage || !runtime.id) {
+          _handleContextInvalidated();
+          resolve({
+            error: "Extension context invalidated — please reload the page.",
+          });
+          return;
+        }
+        runtime.sendMessage(
           {
             type: "CHAT_TOOL_CALL",
             requestId: reqId,
@@ -1574,9 +1718,25 @@
             params: params || {},
           },
           (response) => {
-            if (chrome.runtime.lastError) {
-              const msg = chrome.runtime.lastError.message || "";
-              if (msg.includes("Extension context invalidated")) {
+            let lastError = null;
+            try {
+              lastError = runtime.lastError;
+            } catch (_) {
+              _handleContextInvalidated();
+              resolve({
+                error:
+                  "Extension context invalidated — please reload the page.",
+              });
+              return;
+            }
+            if (lastError) {
+              const msg = lastError.message || "";
+              if (
+                msg.includes("Extension context invalidated") ||
+                msg.includes("Extension context was invalidated") ||
+                msg.includes("message port closed") ||
+                msg.includes("Receiving end does not exist")
+              ) {
                 _handleContextInvalidated();
                 resolve({
                   error:
@@ -1598,17 +1758,20 @@
           },
         );
       } catch (err) {
+        const msg = (err && err.message) || String(err || "");
         if (
-          err.message &&
-          err.message.includes("Extension context invalidated")
+          msg.includes("Extension context invalidated") ||
+          msg.includes("Extension context was invalidated") ||
+          msg.includes("message port closed") ||
+          msg.includes("Receiving end does not exist")
         ) {
           _handleContextInvalidated();
           resolve({
             error: "Extension context invalidated — please reload the page.",
           });
         } else {
-          _err("callTool exception:", err.message);
-          resolve({ error: `Failed to call tool: ${err.message}` });
+          _err("callTool exception:", msg);
+          resolve({ error: `Failed to call tool: ${msg}` });
         }
       }
     });
@@ -1630,7 +1793,16 @@
       const context = getPageContext();
 
       try {
-        chrome.runtime.sendMessage(
+        const runtime = chrome && chrome.runtime;
+        if (!runtime || !runtime.sendMessage || !runtime.id) {
+          _handleContextInvalidated();
+          resolve({
+            fallback: true,
+            error: "Extension context invalidated — please reload the page.",
+          });
+          return;
+        }
+        runtime.sendMessage(
           {
             type: "CHAT_AI_MESSAGE",
             text: text,
@@ -1638,9 +1810,26 @@
             conversationHistory: conversationHistory.slice(-20), // Last 20 messages
           },
           (response) => {
-            if (chrome.runtime.lastError) {
-              const msg = chrome.runtime.lastError.message || "";
-              if (msg.includes("Extension context invalidated")) {
+            let lastError = null;
+            try {
+              lastError = runtime.lastError;
+            } catch (_) {
+              _handleContextInvalidated();
+              resolve({
+                fallback: true,
+                error:
+                  "Extension context invalidated — please reload the page.",
+              });
+              return;
+            }
+            if (lastError) {
+              const msg = lastError.message || "";
+              if (
+                msg.includes("Extension context invalidated") ||
+                msg.includes("Extension context was invalidated") ||
+                msg.includes("message port closed") ||
+                msg.includes("Receiving end does not exist")
+              ) {
                 _handleContextInvalidated();
                 resolve({
                   fallback: true,
@@ -1662,9 +1851,12 @@
           },
         );
       } catch (err) {
+        const msg = (err && err.message) || String(err || "");
         if (
-          err.message &&
-          err.message.includes("Extension context invalidated")
+          msg.includes("Extension context invalidated") ||
+          msg.includes("Extension context was invalidated") ||
+          msg.includes("message port closed") ||
+          msg.includes("Receiving end does not exist")
         ) {
           _handleContextInvalidated();
           resolve({
@@ -1672,8 +1864,8 @@
             error: "Extension context invalidated — please reload the page.",
           });
         } else {
-          _err("sendAiMessage exception:", err.message);
-          resolve({ fallback: true, error: err.message });
+          _err("sendAiMessage exception:", msg);
+          resolve({ fallback: true, error: msg });
         }
       }
     });
@@ -2021,6 +2213,139 @@
       );
       hideTyping();
 
+      // ─── Confirmation Required (Guardrails) ──────────────
+      if (result && result.confirmRequired) {
+        _log(
+          "Confirmation required for",
+          command.tool,
+          "confirmId:",
+          result.confirmId,
+        );
+        clearWelcome();
+        const msg = document.createElement("div");
+        msg.className = "autodom-chat-msg confirm-prompt";
+
+        const shieldIcon = document.createElement("div");
+        shieldIcon.className = "confirm-prompt-icon";
+        shieldIcon.innerHTML = "\u{1F6E1}\uFE0F";
+        msg.appendChild(shieldIcon);
+
+        const title = document.createElement("div");
+        title.className = "confirm-prompt-title";
+        title.textContent = "Confirmation Required";
+        msg.appendChild(title);
+
+        const reason = document.createElement("div");
+        reason.className = "confirm-prompt-reason";
+        reason.textContent =
+          result.reason ||
+          result.message ||
+          `Action "${command.tool}" requires confirmation.`;
+        msg.appendChild(reason);
+
+        const details = document.createElement("div");
+        details.className = "confirm-prompt-details";
+        details.textContent =
+          `Tool: ${command.tool}` +
+          (result.domain ? ` | Domain: ${result.domain}` : "");
+        msg.appendChild(details);
+
+        const btnRow = document.createElement("div");
+        btnRow.className = "confirm-prompt-buttons";
+
+        const confirmBtn = document.createElement("button");
+        confirmBtn.className = "confirm-prompt-btn confirm";
+        confirmBtn.textContent = "Confirm & Execute";
+        confirmBtn.addEventListener("click", async () => {
+          confirmBtn.disabled = true;
+          cancelBtn.disabled = true;
+          confirmBtn.textContent = "Executing...";
+          try {
+            const confirmResult = await new Promise((resolve) => {
+              chrome.runtime.sendMessage(
+                { type: "CONFIRM_SUBMIT_ACTION", confirmId: result.confirmId },
+                (resp) => {
+                  if (chrome.runtime.lastError) {
+                    resolve({ error: chrome.runtime.lastError.message });
+                  } else {
+                    resolve(resp || { error: "No response" });
+                  }
+                },
+              );
+            });
+            btnRow.remove();
+            if (confirmResult && confirmResult.error) {
+              addMessage("error", `Error: ${confirmResult.error}`);
+            } else if (confirmResult && confirmResult.result) {
+              const formatted = formatToolResult(confirmResult.result);
+              addMessage("tool-result", formatted, { toolName: command.tool });
+              conversationHistory.push({
+                role: "assistant",
+                content: `[Confirmed ${command.tool}]: ${formatted.substring(0, 500)}`,
+              });
+            } else {
+              addMessage(
+                "assistant",
+                `\u2705 Action "${command.tool}" confirmed and executed.`,
+              );
+            }
+          } catch (err) {
+            addMessage("error", `Confirm failed: ${err.message}`);
+          }
+        });
+        btnRow.appendChild(confirmBtn);
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.className = "confirm-prompt-btn cancel";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.addEventListener("click", () => {
+          confirmBtn.disabled = true;
+          cancelBtn.disabled = true;
+          chrome.runtime.sendMessage(
+            { type: "CANCEL_SUBMIT_ACTION", confirmId: result.confirmId },
+            () => {},
+          );
+          btnRow.remove();
+          addMessage("system", `Action "${command.tool}" cancelled.`);
+          conversationHistory.push({
+            role: "assistant",
+            content: `[Cancelled ${command.tool}]`,
+          });
+        });
+        btnRow.appendChild(cancelBtn);
+
+        msg.appendChild(btnRow);
+        messagesContainer.appendChild(msg);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        messages.push({
+          role: "assistant",
+          content: `[Confirmation required for ${command.tool}]`,
+        });
+        conversationHistory.push({
+          role: "assistant",
+          content: `Confirmation required: ${result.reason || command.tool}`,
+        });
+        return;
+      }
+
+      // ─── Rate Limited (Guardrails) ───────────────────────
+      if (result && result.rateLimited) {
+        const resetSecs = result.resetInMs
+          ? Math.ceil(result.resetInMs / 1000)
+          : "?";
+        addMessage(
+          "error",
+          `\u{1F6A6} Rate limit hit for ${result.domain || "this domain"}: ` +
+            `${result.callsInWindow || "?"}/${result.budget || "?"} calls used. ` +
+            `Resets in ${resetSecs}s.`,
+        );
+        conversationHistory.push({
+          role: "assistant",
+          content: `Rate limited on ${result.domain}: ${result.error}`,
+        });
+        return;
+      }
+
       if (result && result.error) {
         addMessage("error", `Error: ${result.error}`);
         conversationHistory.push({
@@ -2239,6 +2564,7 @@
   // ─── Listen for status/control messages from service worker ─
   _log("Registering onMessage listener...");
   chrome.runtime.onMessage.addListener((message) => {
+    if (_contextInvalidated) return;
     _log(
       "onMessage received:",
       message.type,

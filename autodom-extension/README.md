@@ -2,7 +2,9 @@
 
 **AI-powered browser automation through MCP.** Connect your IDE's AI agent to a real browser and let it navigate, click, type, screenshot, and inspect — all through natural language.
 
-AutoDOM is a Chrome extension + MCP bridge server that exposes 54 browser-automation tools to any MCP-compatible AI agent (GitHub Copilot, JetBrains AI Assistant, Claude Desktop, Cursor, Gemini CLI, and more).
+AutoDOM is a Chromium extension + MCP bridge server that exposes 54 browser-automation tools to any MCP-compatible AI agent (GitHub Copilot, JetBrains AI Assistant, Claude Desktop, Cursor, Gemini CLI, and more).
+
+Firefox is also supported with a separate Gecko-compatible manifest for local development and testing, with a few feature caveats noted below.
 
 ### What's New
 
@@ -117,15 +119,15 @@ Settings persist across sessions via `chrome.storage.local`.
 ## Architecture
 
 ```
-┌─────────────┐       stdio (MCP)       ┌──────────────────┐      WebSocket       ┌─────────────────────┐
-│  IDE / Agent │ ◄────────────────────► │  Bridge Server    │ ◄──────────────────► │  Chrome Extension   │
-│  (Copilot,   │   JSON-RPC over        │  (Node.js)        │   ws://127.0.0.1:   │  (Service Worker +  │
-│   AI Asst,   │   stdin/stdout         │  server/index.js  │   9876              │   Content Scripts)  │
-│   Claude…)   │                        │                   │                      │                     │
-└─────────────┘                         └──────────────────┘                      └──────────┬──────────┘
+┌─────────────┐       stdio (MCP)       ┌──────────────────┐      WebSocket       ┌────────────────────────────┐
+│  IDE / Agent │ ◄────────────────────► │  Bridge Server    │ ◄──────────────────► │  Browser Extension         │
+│  (Copilot,   │   JSON-RPC over        │  (Node.js)        │   ws://127.0.0.1:   │  Chromium / Firefox        │
+│   AI Asst,   │   stdin/stdout         │  server/index.js  │   9876              │  (Background + Content)    │
+│   Claude…)   │                        │                   │                      │                            │
+└─────────────┘                         └──────────────────┘                      └──────────┬─────────────────┘
                                               │                                               │
-                                   (optional) │ SSE                                 chrome.tabs / scripting
-                                   http://127.0.0.1:<sse-port>                      chrome.debugger APIs
+                                   (optional) │ SSE                                 tabs / scripting / debugger
+                                   http://127.0.0.1:<sse-port>                      browser extension APIs
                                               │                                               │
                                     ┌─────────▼─────────┐                             ┌───────▼───────┐
                                     │  Browser Chat /    │                             │   Browser Tab  │
@@ -153,9 +155,29 @@ Settings persist across sessions via `chrome.storage.local`.
 1. The IDE spawns `node server/index.js` as a child process and talks MCP over stdio.
 2. The server opens a WebSocket on `ws://127.0.0.1:9876` and waits for the extension.
 3. The Chrome extension's service worker connects to the WebSocket on startup.
-4. When the agent calls a tool (e.g. `click`), the server forwards it over WebSocket → the extension executes it via `chrome.scripting` / `chrome.debugger` → the result flows back.
+4. When the agent calls a tool (e.g. `click`), the server forwards it over WebSocket → the extension executes it via browser extension APIs such as `scripting` / `debugger` → the result flows back.
 5. The in-browser chat panel (`Ctrl/Cmd+Shift+K`) lets users call tools directly from any page without the IDE.
 6. Sessions auto-close after 10 minutes of inactivity (configurable via `AUTODOM_INACTIVITY_TIMEOUT`).
+
+### Browser Support
+
+| Browser | Status | Notes |
+|---|---|---|
+| **Chrome / Edge / Brave / Arc / other Chromium browsers** | Fully supported | Primary target. Use `extension/manifest.json`. |
+| **Firefox** | Supported with caveats | Use `extension/manifest.firefox.json` as the manifest when loading the add-on for development. Some Chromium-specific capabilities have partial support or different behavior. |
+
+### Firefox Notes
+
+Firefox support is aimed at keeping the core AutoDOM workflow available: popup UI, content scripts, WebSocket bridge connection, in-page chat, DOM inspection, basic click/type/navigation flows, and storage-backed settings.
+
+Current caveats in Firefox:
+
+- **Manifest loading** — Firefox should use the Gecko-specific manifest (`manifest.firefox.json`) rather than the default Chromium manifest.
+- **Background script model** — The Firefox manifest uses a background script entry compatible with Gecko rather than the Chromium `service_worker` declaration.
+- **`debugger`-powered tools** — Features that depend on DevTools protocol behavior may differ from Chromium or require additional validation in Firefox.
+- **Advanced tooling** — Capabilities such as file upload, device emulation, dialog handling, and performance tracing are the most likely to behave differently across browsers.
+- **Permissions parity** — Chromium-only permissions such as `sidePanel` and `nativeMessaging` are not included in the Firefox manifest.
+- **Recommended expectation** — Treat Firefox support as compatible for everyday automation and chat workflows, while validating advanced or debugger-heavy tools on a case-by-case basis.
 
 ---
 
@@ -165,7 +187,7 @@ Settings persist across sessions via `chrome.storage.local`.
 |---|---|---|
 | **Node.js** | v18 or later | `node -v` |
 | **npm** | (bundled with Node) | `npm -v` |
-| **Chromium browser** | Chrome, Edge, Brave, Ulaa, Arc, etc. | Any Manifest V3–compatible browser |
+| **Browser** | Chrome, Edge, Brave, Ulaa, Arc, Firefox, etc. | Chromium browsers use `extension/manifest.json`; Firefox uses `extension/manifest.firefox.json` |
 | **IDE with MCP support** | See table below | — |
 
 ### Supported IDEs
@@ -205,11 +227,13 @@ The script will:
 
 Then:
 
-1. Open your browser → `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the `extension/` folder
+1. Load the browser extension:
+   - **Chromium browsers:** open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `extension/` folder
+   - **Firefox:** open `about:debugging`, choose **This Firefox**, click **Load Temporary Add-on**, and select `extension/manifest.firefox.json`
 2. Pin AutoDOM to the toolbar
 3. Restart your IDE
 4. Open the AutoDOM popup → click **Connect** (or it auto-connects)
-5. Use your AI agent — all 54 tools are available
+5. Use your AI agent — core automation tools are available in both Chromium and Firefox
 6. Press `Ctrl+Shift+K` (or `Cmd+Shift+K` on macOS) on any page to open the in-browser chat panel
 
 ---
@@ -423,9 +447,11 @@ These tools are inspired by [OpenBrowser-AI](https://github.com/billy-enrizky/op
 | `set_viewport` | Resize browser viewport |
 | `emulate` | Emulate device (user agent, viewport, color scheme) |
 | `upload_file` | Upload a local file via `input[type=file]` |
-| `performance_start_trace` | Start Chrome DevTools performance trace |
+| `performance_start_trace` | Start browser performance trace |
 | `performance_stop_trace` | Stop trace and get data |
 | `performance_analyze_insight` | Analyze specific performance insights |
+
+> Note: advanced tools in this section rely more heavily on debugger/protocol behavior and should be validated in Firefox before production use.
 
 ---
 
@@ -786,7 +812,8 @@ AutoDOM is designed to be lightweight and efficient. The following optimizations
 
 - **Cross-origin iframes** — Content script injection works on the top-level page. Elements inside cross-origin iframes may not be accessible via CSS selectors.
 
-- **File upload** — The `upload_file` tool uses `chrome.debugger` (CDP) to set files on `<input type="file">` elements. The browser may show a debugger-attached notification bar.
+- **File upload** — The `upload_file` tool uses the browser debugger integration to set files on `<input type="file">` elements. In Chromium, this is implemented via `chrome.debugger` / CDP and the browser may show a debugger-attached notification bar.
+- **Firefox compatibility** — Core extension features are supported through `manifest.firefox.json`, but advanced debugger-driven tools may behave differently than in Chromium and should be tested individually.
 
 ---
 
