@@ -1,0 +1,5 @@
+# AutoDOM extension — local overrides
+# (root .gitignore covers node_modules, .env, .DS_Store, etc.)
+
+# Zed editor config — tracked intentionally via .zed/
+# server/test-* files — kept for development reference

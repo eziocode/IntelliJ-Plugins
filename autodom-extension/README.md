@@ -1,0 +1,768 @@
+# AutoDOM
+
+**AI-powered browser automation through MCP.** Connect your IDE's AI agent to a real browser and let it navigate, click, type, screenshot, and inspect — all through natural language.
+
+AutoDOM is a Chrome extension + MCP bridge server that exposes 54 browser-automation tools to any MCP-compatible AI agent (GitHub Copilot, JetBrains AI Assistant, Claude Desktop, Cursor, Gemini CLI, and more).
+
+### What's New
+
+- 🚀 **Token-Efficient Tools** — Inspired by [OpenBrowser-AI](https://github.com/billy-enrizky/openbrowser-ai), new tools like `execute_code`, `get_dom_state`, `batch_actions`, and `extract_data` reduce token usage by 3-6x compared to individual tool calls.
+- 💬 **In-Browser Chat** — A built-in AI chat sidebar (`Ctrl/Cmd+Shift+K`) lets you interact with MCP tools directly from any web page — no IDE required.
+- ⏱️ **Inactivity Auto-Shutdown** — Sessions auto-close after 10 minutes of no tool activity to free resources. Warnings appear at 8 minutes.
+- 🌐 **SSE Transport** — Optional Server-Sent Events transport (`--sse-port`) enables browser-based and remote MCP agent connections alongside stdio.
+- ⚡ **Lightweight & Efficient** — Exponential backoff on reconnects, History API–based SPA detection (replaces DOM-wide MutationObserver), ring-buffer tool logs, and cached keepalive messages minimize CPU and memory footprint.
+
+---
+
+## Architecture
+
+```
+┌─────────────┐       stdio (MCP)       ┌──────────────────┐      WebSocket       ┌─────────────────────┐
+│  IDE / Agent │ ◄────────────────────► │  Bridge Server    │ ◄──────────────────► │  Chrome Extension   │
+│  (Copilot,   │   JSON-RPC over        │  (Node.js)        │   ws://127.0.0.1:   │  (Service Worker +  │
+│   AI Asst,   │   stdin/stdout         │  server/index.js  │   9876              │   Content Scripts)  │
+│   Claude…)   │                        │                   │                      │                     │
+└─────────────┘                         └──────────────────┘                      └──────────┬──────────┘
+                                              │                                               │
+                                   (optional) │ SSE                                 chrome.tabs / scripting
+                                   http://127.0.0.1:<sse-port>                      chrome.debugger APIs
+                                              │                                               │
+                                    ┌─────────▼─────────┐                             ┌───────▼───────┐
+                                    │  Browser Chat /    │                             │   Browser Tab  │
+                                    │  Remote Clients    │                             │   (any page)   │
+                                    └───────────────────┘                             └───────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  In-Browser Chat Panel (content script: chat-panel.js)          │
+│                                                                 │
+│  User types command ──► parse ──► chrome.runtime.sendMessage    │
+│                                         │                       │
+│                                    Service Worker               │
+│                                    TOOL_HANDLERS.get(tool)      │
+│                                         │                       │
+│                                    Execute in tab               │
+│                                         │                       │
+│  Chat displays result ◄── sendResponse ◄┘                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**How it works:**
+
+1. The IDE spawns `node server/index.js` as a child process and talks MCP over stdio.
+2. The server opens a WebSocket on `ws://127.0.0.1:9876` and waits for the extension.
+3. The Chrome extension's service worker connects to the WebSocket on startup.
+4. When the agent calls a tool (e.g. `click`), the server forwards it over WebSocket → the extension executes it via `chrome.scripting` / `chrome.debugger` → the result flows back.
+5. The in-browser chat panel (`Ctrl/Cmd+Shift+K`) lets users call tools directly from any page without the IDE.
+6. Sessions auto-close after 10 minutes of inactivity (configurable via `AUTODOM_INACTIVITY_TIMEOUT`).
+
+---
+
+## Prerequisites
+
+| Requirement | Version | Check |
+|---|---|---|
+| **Node.js** | v18 or later | `node -v` |
+| **npm** | (bundled with Node) | `npm -v` |
+| **Chromium browser** | Chrome, Edge, Brave, Ulaa, Arc, etc. | Any Manifest V3–compatible browser |
+| **IDE with MCP support** | See table below | — |
+
+### Supported IDEs
+
+| IDE | MCP Config Location |
+|---|---|
+| **IntelliJ / JetBrains** (IDEA, WebStorm, PyCharm, GoLand, etc.) | Settings → Tools → MCP Servers |
+| **VS Code / Cursor** | `.vscode/mcp.json` in workspace root |
+| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+| **Gemini CLI** | `~/.gemini/settings.json` |
+
+### Ports
+
+AutoDOM uses **TCP port 9876** on localhost for the WebSocket bridge. Make sure nothing else is using it:
+
+```bash
+lsof -ti:9876   # should return nothing
+```
+
+Optionally, the SSE transport uses a second port (e.g. `--sse-port 9877`) for browser-based/remote agent connections.
+
+---
+
+## Quick Setup
+
+```bash
+cd autodom-extension
+./setup.sh
+```
+
+The script will:
+
+1. ✅ Verify Node.js v18+
+2. ✅ Install server dependencies (`npm install`)
+3. ✅ Auto-detect and configure all installed IDEs
+4. ✅ Print instructions for loading the Chrome extension
+
+Then:
+
+1. Open your browser → `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the `extension/` folder
+2. Pin AutoDOM to the toolbar
+3. Restart your IDE
+4. Open the AutoDOM popup → click **Connect** (or it auto-connects)
+5. Use your AI agent — all 54 tools are available
+6. Press `Ctrl+Shift+K` (or `Cmd+Shift+K` on macOS) on any page to open the in-browser chat panel
+
+---
+
+## Manual Setup
+
+### 1. Install server dependencies
+
+```bash
+cd autodom-extension/server
+npm install
+```
+
+### 2. Load the Chrome extension
+
+1. Navigate to `chrome://extensions` (or your browser's equivalent)
+2. Enable **Developer mode** (top-right toggle)
+3. Click **Load unpacked**
+4. Select the `extension/` folder inside `autodom-extension`
+5. Pin the AutoDOM icon to the toolbar
+
+### 3. Add to your IDE
+
+The MCP server definition is the same everywhere — only the config file location differs:
+
+```json
+{
+  "mcpServers": {
+    "autodom": {
+      "command": "node",
+      "args": ["/absolute/path/to/autodom-extension/server/index.js"]
+    }
+  }
+}
+```
+
+> **Important:** The path must be **absolute**. Relative paths will fail because the IDE's working directory is unpredictable.
+
+#### JetBrains (IntelliJ, WebStorm, PyCharm, etc.)
+
+**For GitHub Copilot agent mode:**
+
+The `setup.sh` script writes `McpToolsStoreService.xml` automatically. To do it manually:
+
+Settings → Tools → MCP Servers → Add → stdio → command: `node`, args: `/absolute/path/to/server/index.js`
+
+**For JetBrains AI Assistant:**
+
+AI Assistant reads the same MCP server definitions but has a separate enable/disable layer. After adding the server above, go to:
+
+Settings → Tools → AI Assistant → MCP Servers → make sure **autodom** is checked/enabled.
+
+The `setup.sh` script also patches `llm.mcpServers.xml` to enable autodom for AI Assistant automatically.
+
+#### VS Code / Cursor
+
+Create `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "mcpServers": {
+    "autodom": {
+      "command": "node",
+      "args": ["/absolute/path/to/autodom-extension/server/index.js"]
+    }
+  }
+}
+```
+
+#### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "autodom": {
+      "command": "node",
+      "args": ["/absolute/path/to/autodom-extension/server/index.js"]
+    }
+  }
+}
+```
+
+#### Gemini CLI
+
+Edit `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "autodom": {
+      "command": "node",
+      "args": ["/absolute/path/to/autodom-extension/server/index.js"]
+    }
+  }
+}
+```
+
+### 4. Connect
+
+1. Click the AutoDOM extension icon in the browser toolbar
+2. The popup should show **Connected** (green)
+3. If it shows **Disconnected**, click **Connect**
+4. In your IDE, the autodom MCP server should show as available with 54 tools
+5. Press `Ctrl/Cmd+Shift+K` on any webpage to open the in-browser AI chat panel
+
+---
+
+## Tool Reference
+
+AutoDOM exposes 54 tools across 9 categories:
+
+### Navigation & Pages
+
+| Tool | Description |
+|---|---|
+| `navigate` | Go to URL, or back/forward/reload |
+| `get_page_info` | Page metadata: title, URL, meta tags, form/link/image counts |
+| `wait_for_navigation` | Wait for page load to complete |
+| `wait_for_text` | Poll until specific text appears on page |
+| `wait_for_network_idle` | Wait until network activity settles |
+
+### Interaction
+
+| Tool | Description |
+|---|---|
+| `click` | Click by CSS selector or visible text |
+| `type_text` | Type into an input/textarea |
+| `press_key` | Keyboard keys/combos (`Enter`, `Control+A`, `Shift+Tab`) |
+| `hover` | Hover to trigger tooltips/dropdowns |
+| `right_click` | Context-menu click |
+| `scroll` | Scroll page or element (up/down/left/right/into_view) |
+| `select_option` | Select from `<select>` dropdown by value/text/index |
+| `fill_form` | Batch-fill multiple form fields |
+| `drag_and_drop` | Drag one element onto another |
+| `handle_dialog` | Accept/dismiss alert/confirm/prompt dialogs |
+
+### DOM Inspection
+
+| Tool | Description |
+|---|---|
+| `take_snapshot` | Structured DOM tree with attributes and text |
+| `query_elements` | Query by CSS selector — returns tag, text, visibility |
+| `extract_text` | Visible text from page or element |
+| `get_html` | innerHTML or outerHTML |
+| `check_element_state` | Visibility, enabled, checked, focused, bounding rect |
+| `wait_for_element` | Wait for element to be visible/hidden/attached/detached |
+| `set_attribute` | Set or remove an HTML attribute |
+
+### Screenshots
+
+| Tool | Description |
+|---|---|
+| `take_screenshot` | Capture viewport as PNG/JPEG/WebP (returned as base64 image) |
+
+### JavaScript Execution
+
+| Tool | Description |
+|---|---|
+| `evaluate_script` | Run sync JavaScript in page context |
+| `execute_async_script` | Run async JavaScript (supports `await`) |
+| `execute_code` | **Token-efficient** — Run arbitrary JS in page context with async support and timeout. The LLM writes JS to extract exactly what it needs instead of receiving full DOM dumps. |
+
+### Token-Efficient Tools
+
+These tools are inspired by [OpenBrowser-AI](https://github.com/billy-enrizky/openbrowser-ai) and reduce token usage by 3-6x by returning only what the AI actually needs instead of full page snapshots.
+
+| Tool | Description |
+|---|---|
+| `get_dom_state` | Compact map of all interactive elements with numeric indices (~2-5K chars vs 500K+ for full snapshots). Always call this before interacting with page elements. |
+| `click_by_index` | Click an element by its numeric index from `get_dom_state`. More reliable than CSS selectors. |
+| `type_by_index` | Type text into an element by its numeric index from `get_dom_state`. |
+| `batch_actions` | Execute multiple browser actions in a single round-trip. Chain `navigate→wait→extract` in one call. |
+| `extract_data` | Extract structured data using CSS selector + field mapping. Returns compact JSON instead of full HTML. |
+
+### Tab Management
+
+| Tool | Description |
+|---|---|
+| `list_tabs` | List all open tabs with IDs, titles, URLs |
+| `switch_tab` | Switch to tab by ID or index |
+| `open_new_tab` | Open a new tab with URL |
+| `close_tab` | Close a tab by ID |
+| `wait_for_new_tab` | Wait for and auto-switch to a newly opened tab |
+
+### Browser State
+
+| Tool | Description |
+|---|---|
+| `get_cookies` | Get cookies for current page or URL |
+| `set_cookie` | Set a cookie |
+| `get_storage` | Read localStorage or sessionStorage |
+| `set_storage` | Write/clear localStorage or sessionStorage |
+| `get_network_requests` | Recent network requests (via Performance API) |
+| `get_console_logs` | Captured console messages (log/warn/error) |
+
+### Session Recording
+
+| Tool | Description |
+|---|---|
+| `start_recording` | Record user/agent interactions (sensitive data auto-redacted) |
+| `stop_recording` | Stop recording |
+| `get_recording` | Get recorded actions with timestamps |
+| `get_session_summary` | Human-readable session summary for test cases/bug reports |
+
+### Advanced
+
+| Tool | Description |
+|---|---|
+| `set_viewport` | Resize browser viewport |
+| `emulate` | Emulate device (user agent, viewport, color scheme) |
+| `upload_file` | Upload a local file via `input[type=file]` |
+| `performance_start_trace` | Start Chrome DevTools performance trace |
+| `performance_stop_trace` | Stop trace and get data |
+| `performance_analyze_insight` | Analyze specific performance insights |
+
+---
+
+## In-Browser Chat
+
+AutoDOM includes a built-in AI chat sidebar that lets you interact with MCP tools directly from any web page — no IDE required.
+
+### Opening the Chat
+
+- **Keyboard shortcut:** `Ctrl+Shift+K` (Windows/Linux) or `Cmd+Shift+K` (macOS)
+- **Click** the floating AutoDOM button (bottom-right corner of any page)
+- Press `Escape` to close
+
+### Chat Commands
+
+| Command | Description |
+|---|---|
+| `/dom` | Get interactive elements with indices |
+| `/click <index\|text>` | Click an element by index or visible text |
+| `/type <index> <text>` | Type into an element by index |
+| `/nav <url>` | Navigate to a URL |
+| `/screenshot` | Capture the page |
+| `/info` | Page metadata |
+| `/js <code>` | Execute JavaScript in page context |
+| `/extract` | Extract visible page text |
+| `/help` | Show all commands |
+
+You can also use natural language: "click the login button", "go to google.com", "what can I click?", "take a screenshot", "scroll down", "accessibility check".
+
+### Quick Action Buttons
+
+The chat panel includes one-click quick actions: **DOM State**, **Screenshot**, **Page Info**, **Extract Text**, and **A11y Check**.
+
+### Connection Status
+
+The floating button shows a green badge when connected to the MCP bridge server, and red when disconnected. The chat header also shows "Online" / "Offline" status.
+
+---
+
+## Inactivity Auto-Shutdown
+
+Sessions auto-close after **10 minutes** of no tool calls to free resources and prevent zombie sessions. This is inspired by OpenBrowser-AI's session timeout design.
+
+- **Warning at 8 minutes** — The popup, chat panel, and server logs warn that the session will close soon.
+- **Auto-close at 10 minutes** — The server notifies the extension, then shuts down gracefully.
+- **Keepalives don't count** — Only real tool calls reset the timer. Passive WebSocket pings don't extend the session on the extension side.
+- **Configurable** — Set `AUTODOM_INACTIVITY_TIMEOUT` environment variable (in milliseconds). Set to `0` to disable.
+
+```json
+{
+  "mcpServers": {
+    "autodom": {
+      "command": "node",
+      "args": ["/path/to/server/index.js"],
+      "env": {
+        "AUTODOM_INACTIVITY_TIMEOUT": "300000"
+      }
+    }
+  }
+}
+```
+
+The above sets a 5-minute timeout. Default is `600000` (10 minutes).
+
+---
+
+## SSE Transport
+
+For browser-based or remote MCP agent connections, the server supports an optional **Server-Sent Events** transport alongside stdio.
+
+```json
+{
+  "mcpServers": {
+    "autodom": {
+      "command": "node",
+      "args": ["/path/to/server/index.js", "--sse-port", "9877"]
+    }
+  }
+}
+```
+
+This starts an HTTP server on `http://127.0.0.1:9877` with:
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/sse` | GET | SSE stream — receives tool results and events |
+| `/message` | POST | Send JSON-RPC tool call requests |
+| `/health` | GET | Health check — extension status, client count |
+
+---
+
+## Token Efficiency: Design Philosophy
+
+AutoDOM's token-efficient tools are inspired by [OpenBrowser-AI's benchmark results](https://github.com/billy-enrizky/openbrowser-ai), which showed that returning only extracted data (instead of full page snapshots) reduces token usage by 3-6x:
+
+| Approach | Typical Response Size | Token Cost |
+|---|---|---|
+| Full DOM snapshot (`take_snapshot`) | 50K-500K+ chars | High — the LLM must parse the entire tree |
+| Compact DOM state (`get_dom_state`) | 2-5K chars | Low — only interactive elements with indices |
+| Targeted extraction (`extract_data`) | 100-3K chars | Minimal — only the data you asked for |
+| Code execution (`execute_code`) | Varies | Minimal — the LLM writes JS to extract exactly what it needs |
+
+### Best Practices for Token Efficiency
+
+1. **Use `get_dom_state`** instead of `take_snapshot` to discover interactive elements
+2. **Use `click_by_index` / `type_by_index`** with indices from `get_dom_state` instead of CSS selectors
+3. **Use `batch_actions`** to chain multiple operations in one round-trip
+4. **Use `execute_code`** for complex extraction — write JS to return only what you need
+5. **Use `extract_data`** for structured scraping — returns compact JSON arrays
+
+---
+
+## Project Structure
+
+```
+autodom-extension/
+├── extension/                  # Chrome extension (Manifest V3)
+│   ├── manifest.json
+│   ├── background/
+│   │   └── service-worker.js   # WebSocket client, tool execution, inactivity timer
+│   ├── content/
+│   │   ├── session-border.js   # Visual session indicator
+│   │   └── chat-panel.js       # In-browser AI chat sidebar
+│   ├── popup/
+│   │   ├── popup.html
+│   │   ├── popup.css
+│   │   └── popup.js            # Connect/disconnect UI
+│   └── icons/
+├── server/                     # MCP bridge server
+│   ├── index.js                # FastMCP server + WebSocket bridge + SSE + inactivity timeout
+│   ├── wrapper.js              # Wire-logging wrapper (for debugging)
+│   ├── package.json
+│   └── test-*.js               # Test scripts
+├── setup.sh                    # One-click setup script
+├── INSTALL.md                  # Installation guide
+└── README.md                   # This file
+```
+
+---
+
+## How the Bridge Works
+
+The bridge server (`server/index.js`) has two roles:
+
+1. **MCP Server** — Communicates with the IDE over stdio using [FastMCP](https://github.com/jlowin/fastmcp) and the [Model Context Protocol](https://modelcontextprotocol.io). Exposes 54 tools as MCP tool definitions.
+
+2. **WebSocket Server** — Listens on `ws://127.0.0.1:9876` for the Chrome extension. When a tool is called, it forwards the request over WebSocket and waits for the result.
+
+3. **SSE Server (optional)** — When `--sse-port` is specified, starts an HTTP server for browser-based/remote MCP agent connections.
+
+4. **Inactivity Watchdog** — Tracks last tool call timestamp. After 10 minutes of inactivity, warns the extension and shuts down.
+
+### Concurrent IDE Support
+
+If multiple IDEs start autodom simultaneously, only the first becomes the **primary server** (owns the WebSocket). Subsequent instances become **proxy clients** that forward tool calls through the primary. This is transparent to the user.
+
+### Process Lifecycle
+
+- The bridge self-terminates when stdin closes (IDE disconnects), preventing zombie processes.
+- On startup, it cleans up any stale/orphaned processes on the port.
+- Crash protection (`uncaughtException`/`unhandledRejection` handlers) keeps the process alive through transient errors.
+- **Inactivity timeout** — The server and extension both track idle time. After 10 minutes without a tool call, the session auto-closes with a warning at 8 minutes.
+
+---
+
+## Troubleshooting
+
+### "Transport closed" in IDE
+
+This means the bridge server process died or was never started.
+
+**Steps:**
+
+1. Kill any zombie processes:
+   ```bash
+   ps aux | grep "autodom.*index.js" | grep -v grep
+   # Kill anything with high CPU or PPID=1:
+   kill -9 <pid>
+   ```
+
+2. Make sure port 9876 is free:
+   ```bash
+   lsof -ti:9876 | xargs kill -9 2>/dev/null
+   ```
+
+3. Verify the server starts manually:
+   ```bash
+   cd autodom-extension/server
+   echo '{}' | node index.js 2>&1 | head -20
+   # You should see "🚀 AutoDOM Bridge Server Started"
+   ```
+
+4. Check the path in your MCP config is **absolute** and correct.
+
+5. Restart the MCP server in your IDE (Settings → Tools → MCP Servers → restart).
+
+### "Chrome extension is not connected"
+
+The bridge is running but the extension hasn't connected yet.
+
+**Steps:**
+
+1. Open the AutoDOM popup in the browser toolbar
+2. If it says **Disconnected**, click **Connect**
+3. If it still fails, reload the extension:
+   - Go to `chrome://extensions`
+   - Find AutoDOM → click the refresh icon
+   - Then click Connect in the popup
+
+4. Check the port matches (default 9876):
+   ```bash
+   lsof -ti:9876   # should show the bridge PID
+   ```
+
+### Extension shows "Connected" but IDE says unavailable
+
+This happens when the bridge process survived an IDE disconnect (zombie state).
+
+**Fix:**
+
+```bash
+# Kill all autodom processes and let the IDE restart fresh:
+pkill -f "autodom.*index.js"
+```
+
+Then restart the MCP server in your IDE settings.
+
+### Port 9876 is in use
+
+```bash
+# Find what's using it:
+lsof -i :9876
+
+# Kill it:
+lsof -ti:9876 | xargs kill -9
+
+# Or use a different port:
+# In your MCP config, add --port:
+{
+  "args": ["/path/to/server/index.js", "--port", "9877"]
+}
+# Then set the same port in the extension popup
+```
+
+### High CPU usage from node processes
+
+Previous versions could leave orphaned processes that spin at 100% CPU. The current version prevents this, but if you have old zombies:
+
+```bash
+# Find them (PPID=1 means orphaned, high CPU means spinning):
+ps aux | grep "index.js" | grep -v grep
+
+# Kill them all:
+pkill -9 -f "autodom.*index.js"
+```
+
+### Node.js version issues
+
+AutoDOM requires Node.js v18+. Check with:
+
+```bash
+node -v
+```
+
+If you have an older version, update from [nodejs.org](https://nodejs.org) or via your package manager:
+
+```bash
+# macOS (Homebrew)
+brew install node
+
+# Ubuntu/Debian
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+---
+
+## Configuration Options
+
+### Server CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--port <n>` | `9876` | WebSocket port for Chrome extension |
+| `--sse-port <n>` | (disabled) | HTTP port for SSE transport (browser chat, remote agents) |
+| `--stop` | — | Stop any running bridge on the port and exit |
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTODOM_INACTIVITY_TIMEOUT` | `600000` | Session inactivity timeout in ms (10 min). Set to `0` to disable. |
+| `AUTODOM_TOOL_TIMEOUT` | `30000` | Per-tool execution timeout in ms |
+| `AUTODOM_HEARTBEAT_MS` | `15000` | Parent process heartbeat check interval (ms) |
+| `AUTODOM_DEBUG` | `0` | Enable diagnostic logging to stderr |
+| `AUTODOM_WIRE_LOG` | `0` | Log raw MCP wire protocol to `/tmp/autodom-wire.log` |
+
+### Extension settings
+
+- **Port** — configurable in the popup (must match server `--port`)
+- **Auto-connect** — the extension automatically reconnects when the service worker restarts
+- **Chat panel** — Toggle with `Ctrl/Cmd+Shift+K` on any page, or click the floating button
+- **Inactivity timeout** — Extension disconnects after 10 minutes of no tool calls (matches server)
+
+---
+
+## Performance Tuning
+
+AutoDOM is designed to be lightweight and efficient. The following optimizations are built-in:
+
+### Resource-Efficient Defaults
+
+| Component | Interval | Purpose |
+|---|---|---|
+| Parent heartbeat | 15s | Detects orphaned processes when IDE crashes |
+| Inactivity check | 60s | Checks for session idle timeout (10 min default) |
+| WebSocket ping | 15s | Keepalive for Chrome extension connection |
+| Message batching | 5ms | Micro-batches outbound WebSocket frames |
+| Auto-connect backoff | 3s → 30s | Exponential backoff when server is unavailable |
+
+### Environment Variables for Tuning
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTODOM_HEARTBEAT_MS` | `15000` | How often to check if the parent IDE process is alive (ms). Increase to reduce overhead if your IDE is stable. |
+| `AUTODOM_INACTIVITY_TIMEOUT` | `600000` | Session idle timeout in ms (10 min). Set to `0` to disable auto-shutdown. |
+| `AUTODOM_TOOL_TIMEOUT` | `30000` | Max wait time for a single tool execution (ms). Increase for slow pages. |
+
+### Tips for Low Resource Usage
+
+- **Disable wire logging** — `AUTODOM_WIRE_LOG=1` writes every MCP message to disk. Only enable for debugging.
+- **Increase heartbeat interval** — Set `AUTODOM_HEARTBEAT_MS=30000` if you don't need fast orphan detection.
+- **Reduce inactivity timeout** — Set `AUTODOM_INACTIVITY_TIMEOUT=300000` (5 min) if you want sessions to close faster.
+- **Close unused tabs** — The extension's content scripts (chat panel, session border) run on every tab. Fewer tabs = less memory.
+
+---
+
+## Security
+
+- All communication is **localhost only** (`127.0.0.1`). No data leaves your machine.
+- The WebSocket server binds to `127.0.0.1`, not `0.0.0.0`.
+- Session recording automatically **redacts** sensitive data:
+  - Credit card numbers
+  - SSNs
+  - Passwords, tokens, API keys
+  - Bearer tokens, JWTs
+  - Password-type input values are never recorded
+
+---
+
+## Known Issues
+
+- **Inactivity auto-shutdown** — Sessions close after 10 minutes of idle. This is intentional — use any tool to keep the session alive, or set `AUTODOM_INACTIVITY_TIMEOUT=0` to disable.
+
+- **Service worker idle timeout** — Chrome suspends MV3 service workers after ~30 seconds of inactivity. The keepalive mechanism (sends a ping every 20s) prevents this, but if Chrome is under heavy memory pressure, the service worker may still be evicted and need to reconnect.
+
+- **`chrome://` and extension pages** — Chrome extensions cannot inject scripts into `chrome://` URLs, `chrome-extension://` pages, or the Chrome Web Store. Tools like `click`, `type_text`, and `evaluate_script` will fail on these pages.
+
+- **Cross-origin iframes** — Content script injection works on the top-level page. Elements inside cross-origin iframes may not be accessible via CSS selectors.
+
+- **File upload** — The `upload_file` tool uses `chrome.debugger` (CDP) to set files on `<input type="file">` elements. The browser may show a debugger-attached notification bar.
+
+---
+
+## Development
+
+### Running tests
+
+```bash
+cd autodom-extension/server
+
+# End-to-end test (requires Chrome extension to be loaded and connected)
+node test-e2e.cjs
+
+# Concurrent IDE proxy test
+node test-concurrent.cjs
+
+# Crash resilience test
+node test-crash.js
+```
+
+### Wire-protocol debugging
+
+To see the raw MCP messages between IDE and server, swap the MCP config to use the wrapper:
+
+```json
+{
+  "args": ["/path/to/autodom-extension/server/wrapper.js"]
+}
+```
+
+Logs are written to `/tmp/autodom-wire-<pid>.log`.
+
+### Testing with SSE transport
+
+```bash
+# Start server with SSE on port 9877
+node server/index.js --sse-port 9877
+
+# Health check
+curl http://127.0.0.1:9877/health
+
+# Connect SSE stream
+curl -N http://127.0.0.1:9877/sse
+
+# Send a tool call (in another terminal)
+curl -X POST http://127.0.0.1:9877/message \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_info","arguments":{}}}'
+```
+
+### Testing token-efficient tools
+
+```bash
+# Compare token usage: full snapshot vs compact DOM state
+# In your IDE, ask the agent:
+#   "Use get_dom_state to show me the interactive elements"
+# vs:
+#   "Use take_snapshot to show me the page structure"
+# The get_dom_state response will be 50-200x smaller.
+```
+
+### Stopping the server manually
+
+```bash
+cd autodom-extension/server
+node index.js --stop
+```
+
+---
+
+## Acknowledgements
+
+Token efficiency design and benchmarking methodology inspired by [OpenBrowser-AI](https://github.com/billy-enrizky/openbrowser-ai) by [@billy-enrizky](https://github.com/billy-enrizky). Their single-tool `execute_code` approach and compact DOM state concept demonstrated 3-6x token reduction compared to traditional multi-tool MCP servers.
+
+---
+
+## License
+
+MIT

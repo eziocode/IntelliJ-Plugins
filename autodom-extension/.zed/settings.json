@@ -1,0 +1,14 @@
+{
+  "context_servers": {
+    "autodom": {
+      "command": {
+        "path": "node",
+        "args": [
+          "/Users/aswin-17517/Documents/IntelliJ Plugins/autodom-extension/server/index.js"
+        ],
+        "env": {}
+      },
+      "settings": {}
+    }
+  }
+}

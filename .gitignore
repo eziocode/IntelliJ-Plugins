@@ -1,0 +1,38 @@
+# OS
+.DS_Store
+.AppleDouble
+Thumbs.db
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+
+# Environment / Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Build artifacts
+*.zip
+*.tar.gz
+*.tgz
+*.log
+logs/
+coverage/
+
+# IDE / Editor (not tracked)
+.idea/
+.vscode/
+*.swp
+*~
+
+# AI / Learning state files
+AI Learning Tools.xml
+learn-from-ai-chats.py
+.ai-learn-state.json
+autodom-extension.zip
