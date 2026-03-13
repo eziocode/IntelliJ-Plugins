@@ -82,6 +82,49 @@
   let inlineMode = false; // inline overlay mode (like browser atlas)
   let _statusPollInterval = null;
 
+  // ─── Persistence Helpers ─────────────────────────────────
+  const STORAGE_KEY_MESSAGES = "__autodom_chat_messages";
+  const STORAGE_KEY_HISTORY = "__autodom_chat_history";
+  const STORAGE_KEY_OPEN = "__autodom_chat_open";
+  const MAX_PERSISTED_MESSAGES = 50;
+
+  function persistChatState() {
+    if (_contextInvalidated) return;
+    try {
+      const trimmedMessages = messages.slice(-MAX_PERSISTED_MESSAGES);
+      const trimmedHistory = conversationHistory.slice(-MAX_PERSISTED_MESSAGES);
+      sessionStorage.setItem(
+        STORAGE_KEY_MESSAGES,
+        JSON.stringify(trimmedMessages),
+      );
+      sessionStorage.setItem(
+        STORAGE_KEY_HISTORY,
+        JSON.stringify(trimmedHistory),
+      );
+      sessionStorage.setItem(STORAGE_KEY_OPEN, isOpen ? "1" : "0");
+    } catch (_) {}
+  }
+
+  function restoreChatState() {
+    try {
+      const storedMessages = sessionStorage.getItem(STORAGE_KEY_MESSAGES);
+      const storedHistory = sessionStorage.getItem(STORAGE_KEY_HISTORY);
+      const storedOpen = sessionStorage.getItem(STORAGE_KEY_OPEN);
+      if (storedMessages) {
+        messages = JSON.parse(storedMessages);
+      }
+      if (storedHistory) {
+        conversationHistory = JSON.parse(storedHistory);
+      }
+      return {
+        hadMessages: messages.length > 0,
+        wasOpen: storedOpen === "1",
+      };
+    } catch (_) {
+      return { hadMessages: false, wasOpen: false };
+    }
+  }
+
   // ─── Inject Styles ─────────────────────────────────────────
   const style = document.createElement("style");
   style.id = STYLE_ID;
@@ -1376,12 +1419,14 @@
     }
     updateContext();
     checkConnectionStatus();
+    persistChatState();
   }
 
   function closePanel() {
     _log("closePanel called");
     isOpen = false;
     panel.classList.remove("open");
+    persistChatState();
   }
 
   closeBtn.addEventListener("click", closePanel);
@@ -1390,6 +1435,7 @@
   clearBtn.addEventListener("click", () => {
     messages = [];
     conversationHistory = [];
+    persistChatState();
     messagesContainer.innerHTML = `
       <div class="autodom-chat-welcome">
         <div class="autodom-chat-welcome-icon">
@@ -1655,6 +1701,7 @@
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
     messages.push({ role, content });
+    persistChatState();
     return msg;
   }
 
@@ -2718,6 +2765,26 @@
   _log("chatInput element:", chatInput ? "OK" : "MISSING");
   _log("sendBtn element:", sendBtn ? "OK" : "MISSING");
   _log("messagesContainer:", messagesContainer ? "OK" : "MISSING");
+  // ─── Restore Persisted Chat State ──────────────────────────
+  const restored = restoreChatState();
+  if (restored.hadMessages) {
+    // Re-render persisted messages into the DOM
+    messagesContainer.innerHTML = "";
+    messages.forEach((msg) => {
+      const el = document.createElement("div");
+      el.className = `autodom-chat-msg ${msg.role}`;
+      el.appendChild(document.createTextNode(msg.content));
+      messagesContainer.appendChild(el);
+    });
+    // Scroll to bottom
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+  if (restored.wasOpen) {
+    // Re-open panel if it was open before reload/navigation
+    isMcpActive = true;
+    openPanel();
+  }
+
   updateContext();
 
   // SPA navigation detection — uses History API interception instead of

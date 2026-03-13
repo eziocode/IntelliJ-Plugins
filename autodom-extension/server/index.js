@@ -24,7 +24,6 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 
-const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
 // ─── Wire-Protocol Logger ────────────────────────────────────
@@ -377,10 +376,13 @@ function getToolTier(toolName) {
 const directProviderConfig = {
   provider: "ide",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
+  openaiBaseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
   openaiModel: process.env.AUTODOM_OPENAI_MODEL || "gpt-4.1-mini",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
   anthropicModel:
     process.env.AUTODOM_ANTHROPIC_MODEL || "claude-3-5-sonnet-latest",
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434",
+  ollamaModel: process.env.AUTODOM_OLLAMA_MODEL || "llama3.2",
 };
 
 // ─── WebSocket Message Batching ──────────────────────────────
@@ -1126,6 +1128,15 @@ function _processWsMessage(socket, message) {
       message;
     touchActivity();
 
+    // Debug: log what provider info we received from the extension
+    process.stderr.write(
+      `[AutoDOM] AI_CHAT_REQUEST: provider=${JSON.stringify(provider)}, ` +
+        `providerConfig.provider=${providerConfig?.provider || "(none)"}, ` +
+        `providerConfig.openaiApiKey=${providerConfig?.openaiApiKey ? "set(" + providerConfig.openaiApiKey.length + " chars)" : "(empty)"}, ` +
+        `providerConfig.anthropicApiKey=${providerConfig?.anthropicApiKey ? "set(" + providerConfig.anthropicApiKey.length + " chars)" : "(empty)"}, ` +
+        `providerConfig.ollamaBaseUrl=${providerConfig?.ollamaBaseUrl || "(none)"}\n`,
+    );
+
     if (!extensionSocket || extensionSocket.readyState !== 1) {
       try {
         socket.send(
@@ -1150,6 +1161,14 @@ function _processWsMessage(socket, message) {
         );
         const mergedProviderConfig = mergeProviderConfig(providerConfig);
 
+        process.stderr.write(
+          `[AutoDOM] effectiveProvider="${effectiveProvider}", ` +
+            `hasCredentials=${providerHasCredentials(effectiveProvider, mergedProviderConfig)}, ` +
+            `mergedConfig.provider="${mergedProviderConfig.provider}", ` +
+            `mergedConfig.openaiApiKey=${mergedProviderConfig.openaiApiKey ? "set" : "empty"}, ` +
+            `mergedConfig.ollamaBaseUrl=${mergedProviderConfig.ollamaBaseUrl || "none"}\n`,
+        );
+
         if (
           effectiveProvider !== "ide" &&
           providerHasCredentials(effectiveProvider, mergedProviderConfig)
@@ -1159,6 +1178,7 @@ function _processWsMessage(socket, message) {
             text,
             context,
             conversationHistory,
+            providerConfig: mergedProviderConfig,
           });
 
           responseText = providerResult.response;
@@ -1723,6 +1743,10 @@ function callExtensionTool(tool, params) {
 // ─── FastMCP Server ──────────────────────────────────────────
 
 function normalizeProviderSelection(provider) {
+  // Handle object forms: { type: "openai" }, { provider: "openai" }, { source: "openai" }
+  if (provider && typeof provider === "object") {
+    provider = provider.type || provider.provider || provider.source || "ide";
+  }
   const normalized = String(provider || "ide")
     .trim()
     .toLowerCase();
@@ -1736,6 +1760,13 @@ function normalizeProviderSelection(provider) {
   if (normalized === "anthropic" || normalized === "claude") {
     return "anthropic";
   }
+  if (
+    normalized === "ollama" ||
+    normalized === "local" ||
+    normalized === "llama"
+  ) {
+    return "ollama";
+  }
   return "ide";
 }
 
@@ -1748,6 +1779,10 @@ function mergeProviderConfig(incoming = {}) {
       incoming.openaiApiKey != null
         ? incoming.openaiApiKey
         : directProviderConfig.openaiApiKey,
+    openaiBaseUrl:
+      incoming.openaiBaseUrl ||
+      directProviderConfig.openaiBaseUrl ||
+      "https://api.openai.com/v1",
     openaiModel:
       incoming.openaiModel ||
       directProviderConfig.openaiModel ||
@@ -1760,12 +1795,19 @@ function mergeProviderConfig(incoming = {}) {
       incoming.anthropicModel ||
       directProviderConfig.anthropicModel ||
       "claude-3-5-sonnet-latest",
+    ollamaBaseUrl:
+      incoming.ollamaBaseUrl ||
+      directProviderConfig.ollamaBaseUrl ||
+      "http://localhost:11434",
+    ollamaModel:
+      incoming.ollamaModel || directProviderConfig.ollamaModel || "llama3.2",
   };
 }
 
 function providerHasCredentials(provider, config) {
   if (provider === "openai") return !!config.openaiApiKey;
   if (provider === "anthropic") return !!config.anthropicApiKey;
+  if (provider === "ollama") return true; // Ollama runs locally, no API key needed
   return false;
 }
 
@@ -1805,47 +1847,39 @@ async function callOpenAIProvider({
   conversationHistory,
   providerConfig,
 }) {
-  const response = await fetch(OPENAI_API_URL, {
+  const baseUrl = (
+    providerConfig.openaiBaseUrl || "https://api.openai.com/v1"
+  ).replace(/\/+$/, "");
+  const model = providerConfig.openaiModel || "gpt-4.1-mini";
+
+  const messages = [
+    { role: "system", content: buildProviderSystemPrompt(context) },
+  ];
+
+  const historyText = conversationToProviderText(conversationHistory);
+  if (historyText) {
+    messages.push({
+      role: "user",
+      content: `Conversation so far:\n\n${historyText}`,
+    });
+    messages.push({
+      role: "assistant",
+      content: "Understood, I have the conversation context.",
+    });
+  }
+
+  messages.push({ role: "user", content: text });
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${providerConfig.openaiApiKey}`,
     },
     body: JSON.stringify({
-      model: providerConfig.openaiModel,
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: buildProviderSystemPrompt(context),
-            },
-          ],
-        },
-        ...(conversationToProviderText(conversationHistory)
-          ? [
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "input_text",
-                    text: `Conversation so far:\n\n${conversationToProviderText(conversationHistory)}`,
-                  },
-                ],
-              },
-            ]
-          : []),
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: text,
-            },
-          ],
-        },
-      ],
+      model,
+      messages,
+      max_tokens: 4096,
     }),
   });
 
@@ -1855,18 +1889,7 @@ async function callOpenAIProvider({
   }
 
   const payload = await response.json();
-  const outputText =
-    payload?.output_text ||
-    payload?.output
-      ?.flatMap((item) =>
-        Array.isArray(item?.content)
-          ? item.content
-              .filter((part) => part?.type === "output_text" && part?.text)
-              .map((part) => part.text)
-          : [],
-      )
-      .join("\n")
-      .trim();
+  const outputText = payload?.choices?.[0]?.message?.content || "";
 
   return {
     response:
@@ -1876,7 +1899,7 @@ async function callOpenAIProvider({
       {
         tool: "_direct_provider",
         via: "openai",
-        model: providerConfig.openaiModel,
+        model,
       },
     ],
   };
@@ -1944,13 +1967,74 @@ async function callAnthropicProvider({
   };
 }
 
+async function callOllamaProvider({
+  text,
+  context,
+  conversationHistory,
+  providerConfig,
+}) {
+  const baseUrl = (
+    providerConfig.ollamaBaseUrl || "http://localhost:11434"
+  ).replace(/\/+$/, "");
+  const model = providerConfig.ollamaModel || "llama3.2";
+
+  const messages = [
+    { role: "system", content: buildProviderSystemPrompt(context) },
+  ];
+
+  const historyText = conversationToProviderText(conversationHistory);
+  if (historyText) {
+    messages.push({
+      role: "user",
+      content: `Conversation so far:\n\n${historyText}`,
+    });
+    messages.push({
+      role: "assistant",
+      content: "Understood, I have the conversation context.",
+    });
+  }
+
+  messages.push({ role: "user", content: text });
+
+  const response = await fetch(`${baseUrl}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: false,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Ollama error ${response.status}: ${errorText}`);
+  }
+
+  const payload = await response.json();
+  const outputText = payload?.message?.content || "";
+
+  return {
+    response:
+      outputText || "Ollama responded, but no text content was returned.",
+    toolCalls: [
+      {
+        tool: "_direct_provider",
+        via: "ollama",
+        model,
+      },
+    ],
+  };
+}
+
 async function routeDirectProviderChat({
   provider,
   text,
   context,
   conversationHistory,
+  providerConfig: incomingConfig,
 }) {
-  const providerConfig = mergeProviderConfig({ provider });
+  const providerConfig = mergeProviderConfig(incomingConfig || { provider });
 
   if (provider === "openai") {
     return callOpenAIProvider({
@@ -1963,6 +2047,15 @@ async function routeDirectProviderChat({
 
   if (provider === "anthropic") {
     return callAnthropicProvider({
+      text,
+      context,
+      conversationHistory,
+      providerConfig,
+    });
+  }
+
+  if (provider === "ollama") {
+    return callOllamaProvider({
       text,
       context,
       conversationHistory,

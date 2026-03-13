@@ -24,6 +24,8 @@ const DOM = {
   providerSelect: $("#providerSelect"),
   providerApiKey: $("#providerApiKey"),
   providerModel: $("#providerModel"),
+  providerBaseUrl: $("#providerBaseUrl"),
+  providerEnabledToggle: $("#providerEnabledToggle"),
   saveProviderBtn: $("#saveProviderBtn"),
   providerStatus: $("#providerStatus"),
   rateLimitToggle: $("#rateLimitToggle"),
@@ -68,6 +70,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     "aiProviderSource",
     "aiProviderApiKey",
     "aiProviderModel",
+    "aiProviderBaseUrl",
   ]);
   const port = stored.mcpPort || 9876;
   const serverPath = stored.serverPath || null;
@@ -77,6 +80,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     source: stored.aiProviderSource || "ide",
     apiKey: stored.aiProviderApiKey || "",
     model: stored.aiProviderModel || "",
+    baseUrl: stored.aiProviderBaseUrl || "",
   };
 
   DOM.portInput.value = port;
@@ -84,6 +88,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (DOM.providerSelect) DOM.providerSelect.value = providerSettings.source;
   if (DOM.providerApiKey) DOM.providerApiKey.value = providerSettings.apiKey;
   if (DOM.providerModel) DOM.providerModel.value = providerSettings.model;
+  if (DOM.providerBaseUrl) DOM.providerBaseUrl.value = providerSettings.baseUrl;
   updateProviderUI();
 
   // Load guardrails settings
@@ -173,7 +178,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (
       changes.aiProviderSource ||
       changes.aiProviderApiKey ||
-      changes.aiProviderModel
+      changes.aiProviderModel ||
+      changes.aiProviderBaseUrl
     ) {
       providerSettings = {
         source: changes.aiProviderSource
@@ -185,6 +191,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         model: changes.aiProviderModel
           ? changes.aiProviderModel.newValue
           : providerSettings.model,
+        baseUrl: changes.aiProviderBaseUrl
+          ? changes.aiProviderBaseUrl.newValue
+          : providerSettings.baseUrl,
       };
 
       if (DOM.providerSelect)
@@ -193,6 +202,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         DOM.providerApiKey.value = providerSettings.apiKey || "";
       if (DOM.providerModel)
         DOM.providerModel.value = providerSettings.model || "";
+      if (DOM.providerBaseUrl)
+        DOM.providerBaseUrl.value = providerSettings.baseUrl || "";
       updateProviderUI();
     }
   });
@@ -201,11 +212,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     DOM.providerSelect.addEventListener("change", () => {
       providerSettings.source = DOM.providerSelect.value || "ide";
       updateProviderUI();
+      // Auto-save when provider changes so settings persist immediately
+      saveProviderSettings();
     });
   }
 
   if (DOM.saveProviderBtn) {
     DOM.saveProviderBtn.addEventListener("click", saveProviderSettings);
+  }
+
+  if (DOM.providerEnabledToggle) {
+    DOM.providerEnabledToggle.addEventListener("change", () => {
+      // Save provider settings when the toggle changes
+      saveProviderSettings();
+    });
   }
 });
 
@@ -359,12 +379,14 @@ async function saveProviderSettings() {
     source: DOM.providerSelect?.value || "ide",
     apiKey: DOM.providerApiKey?.value?.trim() || "",
     model: DOM.providerModel?.value?.trim() || "",
+    baseUrl: DOM.providerBaseUrl?.value?.trim() || "",
   };
 
   await chrome.storage.local.set({
     aiProviderSource: providerSettings.source,
     aiProviderApiKey: providerSettings.apiKey,
     aiProviderModel: providerSettings.model,
+    aiProviderBaseUrl: providerSettings.baseUrl,
   });
 
   const response = await sendRuntimeMessage({
@@ -373,6 +395,7 @@ async function saveProviderSettings() {
       source: providerSettings.source,
       apiKey: providerSettings.apiKey,
       model: providerSettings.model,
+      baseUrl: providerSettings.baseUrl,
     },
   });
 
@@ -558,6 +581,8 @@ function formatProviderLabel(source) {
       return "GPT";
     case "anthropic":
       return "Claude";
+    case "ollama":
+      return "Ollama";
     default:
       return "IDE Agent";
   }
@@ -570,13 +595,15 @@ function updateProviderUI(statusOverride) {
   const label = formatProviderLabel(source);
 
   if (DOM.providerApiKey) {
-    DOM.providerApiKey.disabled = source === "ide";
+    DOM.providerApiKey.disabled = source === "ide" || source === "ollama";
     DOM.providerApiKey.placeholder =
       source === "openai"
         ? "OpenAI API key"
         : source === "anthropic"
           ? "Anthropic API key"
-          : "Not required for IDE Agent mode";
+          : source === "ollama"
+            ? "Not required for local Ollama"
+            : "Not required for IDE Agent mode";
   }
 
   if (DOM.providerModel) {
@@ -586,6 +613,16 @@ function updateProviderUI(statusOverride) {
     }
     if (!DOM.providerModel.value && source === "anthropic") {
       DOM.providerModel.value = "claude-3-7-sonnet-latest";
+    }
+    if (!DOM.providerModel.value && source === "ollama") {
+      DOM.providerModel.value = "llama3.2";
+    }
+  }
+
+  if (DOM.providerBaseUrl) {
+    DOM.providerBaseUrl.disabled = source === "ide";
+    if (!DOM.providerBaseUrl.value && source === "ollama") {
+      DOM.providerBaseUrl.value = "http://localhost:11434";
     }
   }
 
@@ -603,9 +640,15 @@ function updateProviderUI(statusOverride) {
 
   const hasApiKey = !!(providerSettings.apiKey || "").trim();
   const model = (providerSettings.model || "").trim();
-  DOM.providerStatus.textContent = hasApiKey
-    ? `${label} ready${model ? ` · ${model}` : ""}`
-    : `${label} selected — add API key to enable direct AI`;
+  if (source === "ollama") {
+    DOM.providerStatus.textContent = model
+      ? `Ollama ready · ${model}`
+      : "Ollama selected · default model: llama3.2";
+  } else {
+    DOM.providerStatus.textContent = hasApiKey
+      ? `${label} ready${model ? ` · ${model}` : ""}`
+      : `${label} selected — add API key to enable direct AI`;
+  }
 }
 
 const tabSelect = $("#tabSelect");

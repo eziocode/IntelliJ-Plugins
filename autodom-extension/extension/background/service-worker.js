@@ -17,6 +17,7 @@ let aiProviderSettings = {
   source: "ide",
   apiKey: "",
   model: "",
+  baseUrl: "",
 };
 
 // ─── Inactivity Timeout ─────────────────────────────────────
@@ -791,8 +792,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SET_AUTO_CONNECT") {
-    if (!shouldRunMcp) {
+    const autoConnect = !!message.value;
+    chrome.storage.local.set({ autoConnect });
+    if (autoConnect && !shouldRunMcp) {
+      shouldRunMcp = true;
+      chrome.storage.local.set({ mcpRunning: true });
+      startAutoConnect(getCurrentPort());
+    } else if (!autoConnect && !isConnected) {
+      shouldRunMcp = false;
       stopAutoConnect();
+      chrome.storage.local.set({ mcpRunning: false });
     }
     sendResponse({ success: true });
     return false;
@@ -808,6 +817,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         source: aiProviderSettings.source,
         apiKey: aiProviderSettings.apiKey,
         model: aiProviderSettings.model,
+        baseUrl: aiProviderSettings.baseUrl,
       },
     });
     return false;
@@ -819,12 +829,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       source: incomingProvider.source || "ide",
       apiKey: incomingProvider.apiKey || "",
       model: incomingProvider.model || "",
+      baseUrl: incomingProvider.baseUrl || "",
     };
 
     chrome.storage.local.set({
       aiProviderSource: aiProviderSettings.source,
       aiProviderApiKey: aiProviderSettings.apiKey,
       aiProviderModel: aiProviderSettings.model,
+      aiProviderBaseUrl: aiProviderSettings.baseUrl,
     });
 
     sendResponse({
@@ -833,6 +845,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         source: aiProviderSettings.source,
         apiKey: aiProviderSettings.apiKey,
         model: aiProviderSettings.model,
+        baseUrl: aiProviderSettings.baseUrl,
       },
       statusText:
         aiProviderSettings.source === "ide"
@@ -850,6 +863,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         source: aiProviderSettings.source,
         apiKey: aiProviderSettings.apiKey,
         model: aiProviderSettings.model,
+        baseUrl: aiProviderSettings.baseUrl,
       },
       statusText:
         aiProviderSettings.source === "ide"
@@ -995,14 +1009,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
     touchToolActivity(); // Reset inactivity timer
 
-    const providerType = provider?.type || provider?.provider || "ide";
+    // Resolve providerType from the incoming message OR the saved settings.
+    // The content script sends CHAT_AI_MESSAGE without a provider field,
+    // so provider is undefined here — we must fall back to aiProviderSettings.
+    const providerType =
+      (typeof provider === "string"
+        ? provider
+        : provider?.type || provider?.provider || provider?.source || null) ||
+      aiProviderSettings.source ||
+      "ide";
     const requiresBridge =
       providerType === "ide" ||
       providerType === "mcp" ||
       providerType === "openai" ||
       providerType === "anthropic" ||
       providerType === "gpt" ||
-      providerType === "claude";
+      providerType === "claude" ||
+      providerType === "ollama";
 
     if (requiresBridge && (!ws || ws.readyState !== WebSocket.OPEN)) {
       console.warn(
@@ -1048,9 +1071,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // Send the AI chat request to the MCP bridge server
     // The bridge server will route it to the selected AI provider
-    const selectedProvider = provider || {
-      type: aiProviderSettings.source || "ide",
-    };
+    // Resolve provider to a plain string for the bridge server.
+    // The content-script may omit it; fall back to the saved setting.
+    const selectedProvider =
+      (typeof provider === "string"
+        ? provider
+        : provider?.type || provider?.provider || provider?.source || null) ||
+      aiProviderSettings.source ||
+      "ide";
+
+    console.log(
+      "[AutoDOM SW] CHAT_AI_MESSAGE: resolved provider =",
+      selectedProvider,
+      "| aiProviderSettings =",
+      JSON.stringify(aiProviderSettings),
+    );
 
     const aiMessage = {
       type: "AI_CHAT_REQUEST",
@@ -1069,6 +1104,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           aiProviderSettings.source === "openai"
             ? aiProviderSettings.model || "gpt-4.1-mini"
             : undefined,
+        openaiBaseUrl:
+          aiProviderSettings.source === "openai"
+            ? aiProviderSettings.baseUrl || "https://api.openai.com/v1"
+            : undefined,
         anthropicApiKey:
           aiProviderSettings.source === "anthropic"
             ? aiProviderSettings.apiKey
@@ -1076,6 +1115,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         anthropicModel:
           aiProviderSettings.source === "anthropic"
             ? aiProviderSettings.model || "claude-3-5-sonnet-latest"
+            : undefined,
+        ollamaBaseUrl:
+          aiProviderSettings.source === "ollama"
+            ? aiProviderSettings.baseUrl || "http://localhost:11434"
+            : undefined,
+        ollamaModel:
+          aiProviderSettings.source === "ollama"
+            ? aiProviderSettings.model || "llama3.2"
             : undefined,
       },
     };
@@ -2988,6 +3035,7 @@ chrome.storage.local.get(
     "aiProviderSource",
     "aiProviderApiKey",
     "aiProviderModel",
+    "aiProviderBaseUrl",
   ],
   (result) => {
     const port = result.mcpPort || 9876;
@@ -3000,6 +3048,7 @@ chrome.storage.local.get(
       source: result.aiProviderSource || "ide",
       apiKey: result.aiProviderApiKey || "",
       model: result.aiProviderModel || "",
+      baseUrl: result.aiProviderBaseUrl || "",
     };
 
     chrome.storage.local.set({ mcpRunning: shouldRunMcp });
