@@ -13,6 +13,12 @@ let keepAliveInterval = null;
 let shouldRunMcp = false;
 let _sessionTimedOut = false; // Set when server or extension inactivity timeout fires
 
+let aiProviderSettings = {
+  source: "ide",
+  apiKey: "",
+  model: "",
+};
+
 // ─── Inactivity Timeout ─────────────────────────────────────
 // Auto-disconnect after 10 minutes of no tool calls.
 // Any tool call resets the timer. Keepalives do NOT reset it —
@@ -798,7 +804,63 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       running: shouldRunMcp,
       port: getCurrentPort(),
       recording: sessionRecording.active,
+      provider: {
+        source: aiProviderSettings.source,
+        apiKey: aiProviderSettings.apiKey,
+        model: aiProviderSettings.model,
+      },
     });
+    return false;
+  }
+
+  if (message.type === "SET_AI_PROVIDER") {
+    const incomingProvider = message.provider || {};
+    aiProviderSettings = {
+      source: incomingProvider.source || "ide",
+      apiKey: incomingProvider.apiKey || "",
+      model: incomingProvider.model || "",
+    };
+
+    chrome.storage.local.set({
+      aiProviderSource: aiProviderSettings.source,
+      aiProviderApiKey: aiProviderSettings.apiKey,
+      aiProviderModel: aiProviderSettings.model,
+    });
+
+    sendResponse({
+      success: true,
+      provider: {
+        source: aiProviderSettings.source,
+        apiKey: aiProviderSettings.apiKey,
+        model: aiProviderSettings.model,
+      },
+      statusText:
+        aiProviderSettings.source === "ide"
+          ? isConnected
+            ? "Using IDE Agent over MCP"
+            : "IDE Agent selected — connect MCP to enable full AI"
+          : aiProviderSettings.apiKey
+            ? `${aiProviderSettings.source === "openai" ? "GPT" : aiProviderSettings.source === "anthropic" ? "Claude" : "Provider"} ready${aiProviderSettings.model ? ` · ${aiProviderSettings.model}` : ""}`
+            : `${aiProviderSettings.source === "openai" ? "GPT" : aiProviderSettings.source === "anthropic" ? "Claude" : "Provider"} selected — add API key to enable direct AI`,
+    });
+
+    chrome.runtime.sendMessage({
+      type: "AI_PROVIDER_STATUS",
+      provider: {
+        source: aiProviderSettings.source,
+        apiKey: aiProviderSettings.apiKey,
+        model: aiProviderSettings.model,
+      },
+      statusText:
+        aiProviderSettings.source === "ide"
+          ? isConnected
+            ? "Using IDE Agent over MCP"
+            : "IDE Agent selected — connect MCP to enable full AI"
+          : aiProviderSettings.apiKey
+            ? `${aiProviderSettings.source === "openai" ? "GPT" : aiProviderSettings.source === "anthropic" ? "Claude" : "Provider"} ready${aiProviderSettings.model ? ` · ${aiProviderSettings.model}` : ""}`
+            : `${aiProviderSettings.source === "openai" ? "GPT" : aiProviderSettings.source === "anthropic" ? "Claude" : "Provider"} selected — add API key to enable direct AI`,
+    });
+
     return false;
   }
   // ─── Chat Panel Tool Calls ─────────────────────────────────
@@ -986,13 +1048,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // Send the AI chat request to the MCP bridge server
     // The bridge server will route it to the selected AI provider
+    const selectedProvider = provider || {
+      type: aiProviderSettings.source || "ide",
+    };
+
     const aiMessage = {
       type: "AI_CHAT_REQUEST",
       id: aiRequestId,
       text: text,
       context: context || {},
       conversationHistory: conversationHistory || [],
-      provider: provider || { type: "ide" },
+      provider: selectedProvider,
+      providerConfig: {
+        provider: aiProviderSettings.source || "ide",
+        openaiApiKey:
+          aiProviderSettings.source === "openai"
+            ? aiProviderSettings.apiKey
+            : "",
+        openaiModel:
+          aiProviderSettings.source === "openai"
+            ? aiProviderSettings.model || "gpt-4.1-mini"
+            : undefined,
+        anthropicApiKey:
+          aiProviderSettings.source === "anthropic"
+            ? aiProviderSettings.apiKey
+            : "",
+        anthropicModel:
+          aiProviderSettings.source === "anthropic"
+            ? aiProviderSettings.model || "claude-3-5-sonnet-latest"
+            : undefined,
+      },
     };
 
     // Set up a pending response handler with timeout
@@ -2895,20 +2980,36 @@ function stopAutoConnect() {
 }
 
 // Restore desired state on service worker load.
-chrome.storage.local.get(["mcpPort", "autoConnect", "mcpRunning"], (result) => {
-  const port = result.mcpPort || 9876;
-  shouldRunMcp =
-    typeof result.mcpRunning === "boolean"
-      ? result.mcpRunning
-      : result.autoConnect !== false;
+chrome.storage.local.get(
+  [
+    "mcpPort",
+    "autoConnect",
+    "mcpRunning",
+    "aiProviderSource",
+    "aiProviderApiKey",
+    "aiProviderModel",
+  ],
+  (result) => {
+    const port = result.mcpPort || 9876;
+    shouldRunMcp =
+      typeof result.mcpRunning === "boolean"
+        ? result.mcpRunning
+        : result.autoConnect !== false;
 
-  chrome.storage.local.set({ mcpRunning: shouldRunMcp });
-  if (shouldRunMcp) {
-    startAutoConnect(port);
-  } else {
-    stopAutoConnect();
-  }
-});
+    aiProviderSettings = {
+      source: result.aiProviderSource || "ide",
+      apiKey: result.aiProviderApiKey || "",
+      model: result.aiProviderModel || "",
+    };
+
+    chrome.storage.local.set({ mcpRunning: shouldRunMcp });
+    if (shouldRunMcp) {
+      startAutoConnect(port);
+    } else {
+      stopAutoConnect();
+    }
+  },
+);
 
 // Also auto-connect on extension install/update
 chrome.runtime.onInstalled.addListener(() => {
