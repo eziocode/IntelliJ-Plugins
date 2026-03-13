@@ -456,6 +456,187 @@
                     </div>
                 </div>
 
+                <!-- Guardrails -->
+                <div
+                    class="config-section"
+                    id="guardrailsSection"
+                    style="
+                        background: rgba(255, 255, 255, 0.03);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 10px;
+                        padding: 12px;
+                    "
+                >
+                    <label
+                        class="config-label"
+                        style="
+                            margin-bottom: 10px;
+                            display: flex;
+                            align-items: center;
+                            gap: 6px;
+                        "
+                    >
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path
+                                d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+                            />
+                        </svg>
+                        Guardrails
+                    </label>
+
+                    <div
+                        class="config-input-group"
+                        style="
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                            margin-bottom: 10px;
+                        "
+                    >
+                        <input
+                            type="checkbox"
+                            id="rateLimitToggle"
+                            style="
+                                accent-color: #f59e0b;
+                                width: 16px;
+                                height: 16px;
+                                cursor: pointer;
+                            "
+                        />
+                        <label
+                            class="config-label"
+                            for="rateLimitToggle"
+                            style="
+                                margin-bottom: 0;
+                                cursor: pointer;
+                                text-transform: none;
+                            "
+                        >
+                            Rate limiting per domain
+                        </label>
+                    </div>
+
+                    <div
+                        id="rateLimitSettings"
+                        style="
+                            display: none;
+                            margin-left: 24px;
+                            margin-bottom: 10px;
+                        "
+                    >
+                        <div
+                            style="
+                                display: flex;
+                                align-items: center;
+                                gap: 8px;
+                                margin-bottom: 6px;
+                            "
+                        >
+                            <label
+                                class="config-label"
+                                for="rateLimitMax"
+                                style="
+                                    margin-bottom: 0;
+                                    text-transform: none;
+                                    white-space: nowrap;
+                                    font-size: 11px;
+                                "
+                            >
+                                Max calls/domain
+                            </label>
+                            <input
+                                type="number"
+                                id="rateLimitMax"
+                                value="100"
+                                min="1"
+                                max="10000"
+                                class="config-input"
+                                style="
+                                    width: 70px;
+                                    padding: 4px 8px;
+                                    font-size: 12px;
+                                "
+                            />
+                            <label
+                                class="config-label"
+                                style="
+                                    margin-bottom: 0;
+                                    text-transform: none;
+                                    font-size: 11px;
+                                "
+                                >per</label
+                            >
+                            <select
+                                id="rateLimitWindow"
+                                class="config-input"
+                                style="
+                                    width: 80px;
+                                    padding: 4px 8px;
+                                    font-size: 12px;
+                                "
+                            >
+                                <option value="60000">1 min</option>
+                                <option value="300000">5 min</option>
+                                <option value="600000">10 min</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div
+                        class="config-input-group"
+                        style="
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                            margin-bottom: 6px;
+                        "
+                    >
+                        <input
+                            type="checkbox"
+                            id="confirmSubmitToggle"
+                            style="
+                                accent-color: #ef4444;
+                                width: 16px;
+                                height: 16px;
+                                cursor: pointer;
+                            "
+                        />
+                        <label
+                            class="config-label"
+                            for="confirmSubmitToggle"
+                            style="
+                                margin-bottom: 0;
+                                cursor: pointer;
+                                text-transform: none;
+                            "
+                        >
+                            Confirm before submit/purchase
+                        </label>
+                    </div>
+
+                    <div
+                        class="config-hint"
+                        style="
+                            margin-top: 8px;
+                            line-height: 1.4;
+                            font-size: 10.5px;
+                        "
+                    >
+                        Rate limiting prevents infinite click loops. Confirm
+                        mode catches form submissions, purchases, and checkout
+                        navigations.
+                    </div>
+                </div>
+
                 <!-- Connection Log -->
                 <div class="log-section">
                     <div class="log-header">

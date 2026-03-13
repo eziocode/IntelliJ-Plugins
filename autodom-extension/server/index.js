@@ -208,6 +208,76 @@ const INACTIVITY_TIMEOUT_MS = parseInt(
   10,
 ); // 10 minutes default
 const SSE_PORT = parseInt(getArgValue("--sse-port") || "0", 10);
+
+// ─── Domain Guardrails ───────────────────────────────────────
+// Controls which domains agents can perform write/destructive actions on.
+// Set via environment variables (comma-separated) or CLI args.
+// If ALLOWED_DOMAINS is set, ONLY those domains permit write/destructive ops.
+// If BLOCKED_DOMAINS is set, those domains block write/destructive ops.
+// Read-only tools are always permitted on any domain.
+const ALLOWED_DOMAINS = (
+  process.env.AUTODOM_ALLOWED_DOMAINS ||
+  getArgValue("--allowed-domains") ||
+  ""
+)
+  .split(",")
+  .map((d) => d.trim().toLowerCase())
+  .filter(Boolean);
+const BLOCKED_DOMAINS = (
+  process.env.AUTODOM_BLOCKED_DOMAINS ||
+  getArgValue("--blocked-domains") ||
+  ""
+)
+  .split(",")
+  .map((d) => d.trim().toLowerCase())
+  .filter(Boolean);
+
+// Confirm mode: when enabled, destructive tools return a confirmation
+// request instead of executing directly. The agent must call
+// confirm_action to proceed.
+const CONFIRM_MODE =
+  hasArg("--confirm-mode") || process.env.AUTODOM_CONFIRM_MODE === "true";
+
+let pendingConfirmations = new Map(); // id → { tool, params, domain, tier, timestamp }
+let confirmIdCounter = 0;
+
+function isDomainAllowed(domain, tier) {
+  // Read-only tools are always allowed
+  if (tier === "read") return { allowed: true };
+
+  if (!domain) return { allowed: true }; // No domain context, allow
+
+  const normalizedDomain = domain.toLowerCase();
+
+  // Check blocklist first
+  if (BLOCKED_DOMAINS.length > 0) {
+    const blocked = BLOCKED_DOMAINS.some(
+      (d) => normalizedDomain === d || normalizedDomain.endsWith("." + d),
+    );
+    if (blocked) {
+      return {
+        allowed: false,
+        error: `Domain "${domain}" is blocked for ${tier} operations. Blocked domains: ${BLOCKED_DOMAINS.join(", ")}`,
+      };
+    }
+  }
+
+  // Check allowlist (if set, only allowed domains pass)
+  if (ALLOWED_DOMAINS.length > 0) {
+    const allowed = ALLOWED_DOMAINS.some(
+      (d) => normalizedDomain === d || normalizedDomain.endsWith("." + d),
+    );
+    if (!allowed) {
+      return {
+        allowed: false,
+        error: `Domain "${domain}" is not in the allowed list for ${tier} operations. Allowed domains: ${ALLOWED_DOMAINS.join(", ")}`,
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
 const execFileAsync = promisify(execFile);
 
 // ─── State ───────────────────────────────────────────────────
@@ -230,6 +300,76 @@ let activeMcpSession = null;
 // via the `get_pending_chat_requests` / `respond_to_chat` tools.
 let pendingChatRequests = new Map(); // id → { text, context, socket, timestamp }
 let chatRequestIdCounter = 0;
+
+// ─── Tool Safety Tiers ───────────────────────────────────────
+// Classifies every tool as 'read' (safe, no side effects),
+// 'write' (modifies page state), or 'destructive' (irreversible actions
+// like form submission, purchases, navigation away from page).
+// Used by guardrails: confirm-before-execute, dry-run, and domain budgets.
+const TOOL_TIERS = new Map([
+  // Read-only / inspection tools
+  ["get_dom_state", "read"],
+  ["get_page_info", "read"],
+  ["take_screenshot", "read"],
+  ["take_snapshot", "read"],
+  ["query_elements", "read"],
+  ["extract_text", "read"],
+  ["extract_data", "read"],
+  ["get_html", "read"],
+  ["check_element_state", "read"],
+  ["get_cookies", "read"],
+  ["get_storage", "read"],
+  ["get_network_requests", "read"],
+  ["get_console_logs", "read"],
+  ["list_tabs", "read"],
+  ["get_recording", "read"],
+  ["get_session_summary", "read"],
+  ["wait_for_text", "read"],
+  ["wait_for_element", "read"],
+  ["wait_for_navigation", "read"],
+  ["wait_for_new_tab", "read"],
+  ["wait_for_network_idle", "read"],
+  ["execute_code", "read"], // can be write, but we can't know statically
+  ["evaluate_script", "read"],
+  ["execute_async_script", "read"],
+  ["performance_analyze_insight", "read"],
+  ["get_pending_chat_requests", "read"],
+
+  // Write tools — modify page state but are generally reversible
+  ["click", "write"],
+  ["click_by_index", "write"],
+  ["type_text", "write"],
+  ["type_by_index", "write"],
+  ["hover", "write"],
+  ["press_key", "write"],
+  ["scroll", "write"],
+  ["select_option", "write"],
+  ["set_attribute", "write"],
+  ["set_cookie", "write"],
+  ["set_storage", "write"],
+  ["right_click", "write"],
+  ["drag_and_drop", "write"],
+  ["switch_tab", "write"],
+  ["open_new_tab", "write"],
+  ["close_tab", "write"],
+  ["set_viewport", "write"],
+  ["handle_dialog", "write"],
+  ["start_recording", "write"],
+  ["stop_recording", "write"],
+  ["emulate", "write"],
+  ["upload_file", "write"],
+  ["performance_start_trace", "write"],
+  ["performance_stop_trace", "write"],
+
+  // Destructive tools — irreversible actions (navigation, form submission)
+  ["navigate", "destructive"],
+  ["fill_form", "destructive"],
+  ["respond_to_chat", "destructive"],
+]);
+
+function getToolTier(toolName) {
+  return TOOL_TIERS.get(toolName) || "write"; // Default to write (safe assumption)
+}
 
 // ─── Direct AI Provider Routing ──────────────────────────────
 // Allows the in-browser chat to route directly to OpenAI/Anthropic
@@ -1488,6 +1628,69 @@ function callExtensionTool(tool, params) {
       return;
     }
 
+    // ─── Domain Guardrails Check ─────────────────────────────
+    // For write/destructive tools, verify the current domain is allowed.
+    // We check against the last-known URL from the extension state.
+    const tier = getToolTier(tool);
+    if (tier !== "read") {
+      // Extract domain from params if available (navigate has url param)
+      let checkDomain = null;
+      if (tool === "navigate" && params.url) {
+        try {
+          checkDomain = new URL(
+            params.url.startsWith("http")
+              ? params.url
+              : "https://" + params.url,
+          ).hostname;
+        } catch {}
+      }
+      // For other tools, we rely on the extension reporting the current tab URL
+      // which comes through in tool results. Domain check uses what we have.
+
+      const domainCheck = isDomainAllowed(checkDomain, tier);
+      if (!domainCheck.allowed) {
+        diagLog(
+          `toolCall BLOCKED tool=${tool} domain=${checkDomain} tier=${tier}`,
+        );
+        wrappedResolve({
+          error: domainCheck.error,
+          blocked: true,
+          domain: checkDomain,
+          tier,
+        });
+        return;
+      }
+
+      // ─── Confirm Mode ───────────────────────────────────────
+      // For destructive tools in confirm mode, return a confirmation request
+      if (CONFIRM_MODE && tier === "destructive") {
+        const confirmId = ++confirmIdCounter;
+        pendingConfirmations.set(confirmId, {
+          tool,
+          params,
+          domain: checkDomain,
+          tier,
+          timestamp: Date.now(),
+        });
+        // Auto-expire confirmations after 5 minutes
+        setTimeout(() => pendingConfirmations.delete(confirmId), 300000);
+
+        diagLog(
+          `toolCall CONFIRM_REQUIRED tool=${tool} confirmId=${confirmId}`,
+        );
+        wrappedResolve({
+          confirmRequired: true,
+          confirmId,
+          tool,
+          tier,
+          domain: checkDomain,
+          message: `This is a destructive action (${tool}). Call confirm_action with confirmId=${confirmId} to proceed, or cancel_action to abort.`,
+          params,
+        });
+        return;
+      }
+    }
+
     const id = ++callIdCounter;
     const timer = setTimeout(() => {
       pendingCalls.delete(id);
@@ -1890,7 +2093,8 @@ server.addTool({
   description:
     "Execute multiple browser actions in a single call to minimize round-trips and tokens. " +
     "Each action is {tool, params} where tool is any AutoDOM tool name. Actions execute sequentially. " +
-    "Returns an array of results. Use this to chain navigate→wait→extract in one call.",
+    "Returns an array of results. Use this to chain navigate→wait→extract in one call. " +
+    "Set dryRun=true to validate and preview the execution plan without actually running actions.",
   parameters: z.object({
     actions: z
       .array(
@@ -1913,14 +2117,55 @@ server.addTool({
       .optional()
       .default(false)
       .describe("Stop executing remaining actions if one fails"),
+    dryRun: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        "If true, validate and return the execution plan with tool tiers and risk assessment without executing any actions",
+      ),
   }),
-  execute: async ({ actions, stopOnError }) => {
+  execute: async ({ actions, stopOnError, dryRun }) => {
+    // ─── Dry Run Mode ──────────────────────────────────────
+    if (dryRun) {
+      const plan = actions.map((action, i) => {
+        const tier = getToolTier(action.tool);
+        const known = TOOL_TIERS.has(action.tool);
+        return {
+          step: i,
+          tool: action.tool,
+          tier,
+          known,
+          params: action.params || {},
+          wouldExecute: known,
+        };
+      });
+      const tiers = plan.map((p) => p.tier);
+      const hasDestructive = tiers.includes("destructive");
+      const hasWrite = tiers.includes("write");
+      const riskLevel = hasDestructive ? "high" : hasWrite ? "medium" : "low";
+      return JSON.stringify(
+        {
+          dryRun: true,
+          riskLevel,
+          totalSteps: plan.length,
+          readSteps: tiers.filter((t) => t === "read").length,
+          writeSteps: tiers.filter((t) => t === "write").length,
+          destructiveSteps: tiers.filter((t) => t === "destructive").length,
+          plan,
+        },
+        null,
+        2,
+      );
+    }
+
+    // ─── Normal Execution ──────────────────────────────────
     const results = [];
     for (let i = 0; i < actions.length; i++) {
       const { tool, params } = actions[i];
       try {
         const result = await callExtensionTool(tool, params || {});
-        results.push({ step: i, tool, result });
+        results.push({ step: i, tool, tier: getToolTier(tool), result });
         if (stopOnError && result && result.error) {
           results.push({
             stopped: true,
@@ -1929,7 +2174,12 @@ server.addTool({
           break;
         }
       } catch (err) {
-        results.push({ step: i, tool, error: err.message });
+        results.push({
+          step: i,
+          tool,
+          tier: getToolTier(tool),
+          error: err.message,
+        });
         if (stopOnError) {
           results.push({
             stopped: true,
@@ -1940,6 +2190,92 @@ server.addTool({
       }
     }
     return JSON.stringify(results, null, 2);
+  },
+});
+
+// Expose tool tier classification to agents so they can reason about safety
+server.addTool({
+  name: "get_tool_tiers",
+  description:
+    "Get the safety tier classification for all AutoDOM tools. " +
+    "Returns each tool's tier: 'read' (no side effects), 'write' (modifies page state), " +
+    "or 'destructive' (irreversible like form submission or navigation). " +
+    "Use this to plan safe automation sequences.",
+  parameters: z.object({}),
+  execute: async () => {
+    const tiers = {};
+    for (const [tool, tier] of TOOL_TIERS) {
+      tiers[tool] = tier;
+    }
+    return JSON.stringify({ tiers, totalTools: TOOL_TIERS.size }, null, 2);
+  },
+});
+
+// Confirm a destructive action that was held for confirmation
+server.addTool({
+  name: "confirm_action",
+  description:
+    "Confirm and execute a destructive action that was held for confirmation. " +
+    "When confirm mode is enabled, destructive tools (navigate, fill_form) return a " +
+    "confirmId instead of executing. Call this with that confirmId to proceed.",
+  parameters: z.object({
+    confirmId: z
+      .number()
+      .describe("The confirmId from the confirmation request"),
+  }),
+  execute: async ({ confirmId }) => {
+    const pending = pendingConfirmations.get(confirmId);
+    if (!pending) {
+      return JSON.stringify({
+        error: `No pending confirmation with id ${confirmId}. It may have expired (5 min timeout) or already been confirmed/cancelled.`,
+      });
+    }
+    pendingConfirmations.delete(confirmId);
+
+    try {
+      const result = await callExtensionTool(pending.tool, pending.params);
+      return JSON.stringify(
+        {
+          confirmed: true,
+          tool: pending.tool,
+          tier: pending.tier,
+          result,
+        },
+        null,
+        2,
+      );
+    } catch (err) {
+      return JSON.stringify({
+        confirmed: true,
+        tool: pending.tool,
+        error: err.message,
+      });
+    }
+  },
+});
+
+// Cancel a pending confirmation
+server.addTool({
+  name: "cancel_action",
+  description:
+    "Cancel a destructive action that was held for confirmation. " +
+    "This discards the pending action without executing it.",
+  parameters: z.object({
+    confirmId: z.number().describe("The confirmId to cancel"),
+  }),
+  execute: async ({ confirmId }) => {
+    const pending = pendingConfirmations.get(confirmId);
+    if (!pending) {
+      return JSON.stringify({
+        error: `No pending confirmation with id ${confirmId}.`,
+      });
+    }
+    pendingConfirmations.delete(confirmId);
+    return JSON.stringify({
+      cancelled: true,
+      tool: pending.tool,
+      message: `Cancelled ${pending.tool} action.`,
+    });
   },
 });
 

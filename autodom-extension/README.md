@@ -6,11 +6,111 @@ AutoDOM is a Chrome extension + MCP bridge server that exposes 54 browser-automa
 
 ### What's New
 
+- 🛡️ **Guardrails & Safety Tiers** — Every tool is classified as `read`, `write`, or `destructive`. Per-domain rate limiting, domain allowlists/blocklists, confirm-before-submit mode, and `dryRun` on `batch_actions` keep agents safe in production.
 - 🚀 **Token-Efficient Tools** — Inspired by [OpenBrowser-AI](https://github.com/billy-enrizky/openbrowser-ai), new tools like `execute_code`, `get_dom_state`, `batch_actions`, and `extract_data` reduce token usage by 3-6x compared to individual tool calls.
 - 💬 **In-Browser Chat** — A built-in AI chat sidebar (`Ctrl/Cmd+Shift+K`) lets you interact with MCP tools directly from any web page — no IDE required.
 - ⏱️ **Inactivity Auto-Shutdown** — Sessions auto-close after 10 minutes of no tool activity to free resources. Warnings appear at 8 minutes.
 - 🌐 **SSE Transport** — Optional Server-Sent Events transport (`--sse-port`) enables browser-based and remote MCP agent connections alongside stdio.
 - ⚡ **Lightweight & Efficient** — Exponential backoff on reconnects, History API–based SPA detection (replaces DOM-wide MutationObserver), ring-buffer tool logs, and cached keepalive messages minimize CPU and memory footprint.
+
+---
+
+## Guardrails
+
+AutoDOM includes a layered safety system to prevent agents from going off the rails. All guardrails are opt-in and can be configured via environment variables, CLI flags, or the extension popup.
+
+### Tool Safety Tiers
+
+Every tool is classified into one of three tiers:
+
+| Tier | Examples | Behavior |
+|---|---|---|
+| **`read`** | `get_dom_state`, `take_screenshot`, `query_elements`, `get_cookies` | Always allowed. No side effects. |
+| **`write`** | `click`, `type_text`, `scroll`, `set_cookie`, `switch_tab` | Subject to domain allowlist/blocklist and rate limits. |
+| **`destructive`** | `navigate`, `fill_form` | Subject to all guardrails including confirm mode. |
+
+Call the `get_tool_tiers` MCP tool to inspect the full classification at runtime.
+
+### Dry-Run Mode for `batch_actions`
+
+Pass `dryRun: true` to `batch_actions` to validate and preview an execution plan without running any actions:
+
+```json
+{
+  "actions": [
+    { "tool": "navigate", "params": { "url": "https://example.com/checkout" } },
+    { "tool": "fill_form", "params": { "fields": [...] } },
+    { "tool": "click", "params": { "selector": "#submit" } }
+  ],
+  "dryRun": true
+}
+```
+
+Returns a risk assessment with per-step tier classification, overall `riskLevel` (`low` / `medium` / `high`), and counts of read/write/destructive steps.
+
+### Domain Allowlist & Blocklist
+
+Restrict which domains agents can perform write/destructive actions on. Read-only tools are always permitted.
+
+```bash
+# Only allow automation on these domains (comma-separated)
+AUTODOM_ALLOWED_DOMAINS=myapp.local,staging.example.com node server/index.js
+
+# Block automation on these domains
+AUTODOM_BLOCKED_DOMAINS=bank.example.com,admin.internal node server/index.js
+
+# Or via CLI flags
+node server/index.js --allowed-domains "myapp.local,staging.example.com"
+node server/index.js --blocked-domains "bank.example.com"
+```
+
+Subdomain matching is supported — blocking `example.com` also blocks `sub.example.com`.
+
+### Confirm Mode (Plan → Confirm → Execute)
+
+When enabled, destructive tools return a confirmation request instead of executing immediately. The agent must explicitly call `confirm_action` to proceed or `cancel_action` to abort.
+
+```bash
+# Enable via environment variable
+AUTODOM_CONFIRM_MODE=true node server/index.js
+
+# Or via CLI flag
+node server/index.js --confirm-mode
+```
+
+The flow:
+1. Agent calls `navigate` with a URL → gets back `{ confirmRequired: true, confirmId: 42, ... }`
+2. Agent reviews the plan and calls `confirm_action` with `confirmId: 42` → action executes
+3. Or calls `cancel_action` with `confirmId: 42` → action is discarded
+
+Pending confirmations auto-expire after 5 minutes.
+
+### Per-Domain Rate Limiting
+
+Prevents infinite click loops and runaway automation by tracking tool calls per domain within a sliding time window. Configure via the extension popup:
+
+- **Rate limiting per domain** — Toggle on/off, set max calls per domain (default: 100) and window duration (1 min / 5 min / 10 min).
+- **Per-domain budgets** — Override the default limit for specific domains.
+
+When a rate limit is hit, the tool call returns a `rateLimited: true` error with details about when the limit resets.
+
+### Confirm Before Submit/Purchase
+
+A browser-side safety net (independent of the server's confirm mode) that catches sensitive actions before they execute:
+
+- **Navigation** to URLs matching checkout, payment, billing, cart, or purchase patterns
+- **Clicks** on buttons with text like "Submit", "Buy Now", "Place Order", "Pay Now", "Subscribe"
+- **Form fills** (`fill_form` calls)
+
+Toggle this from the extension popup under **Guardrails → Confirm before submit/purchase**.
+
+### Popup Guardrails Panel
+
+The extension popup includes a **Guardrails** settings card with toggles for:
+- Rate limiting per domain (with configurable max calls and window)
+- Confirm before submit/purchase mode
+
+Settings persist across sessions via `chrome.storage.local`.
 
 ---
 

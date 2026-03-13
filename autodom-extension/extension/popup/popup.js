@@ -26,6 +26,11 @@ const DOM = {
   providerModel: $("#providerModel"),
   saveProviderBtn: $("#saveProviderBtn"),
   providerStatus: $("#providerStatus"),
+  rateLimitToggle: $("#rateLimitToggle"),
+  rateLimitMax: $("#rateLimitMax"),
+  rateLimitWindow: $("#rateLimitWindow"),
+  rateLimitSettings: $("#rateLimitSettings"),
+  confirmSubmitToggle: $("#confirmSubmitToggle"),
 };
 
 let isRunning = false;
@@ -80,6 +85,32 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (DOM.providerApiKey) DOM.providerApiKey.value = providerSettings.apiKey;
   if (DOM.providerModel) DOM.providerModel.value = providerSettings.model;
   updateProviderUI();
+
+  // Load guardrails settings
+  const guardrails = await chrome.storage.local.get([
+    "rateLimitConfig",
+    "confirmBeforeSubmitConfig",
+  ]);
+  if (guardrails.rateLimitConfig) {
+    if (DOM.rateLimitToggle)
+      DOM.rateLimitToggle.checked = !!guardrails.rateLimitConfig.enabled;
+    if (DOM.rateLimitMax)
+      DOM.rateLimitMax.value =
+        guardrails.rateLimitConfig.maxCallsPerDomain || 100;
+    if (DOM.rateLimitWindow)
+      DOM.rateLimitWindow.value = String(
+        guardrails.rateLimitConfig.windowMs || 60000,
+      );
+    if (DOM.rateLimitSettings)
+      DOM.rateLimitSettings.style.display = guardrails.rateLimitConfig.enabled
+        ? "block"
+        : "none";
+  }
+  if (guardrails.confirmBeforeSubmitConfig) {
+    if (DOM.confirmSubmitToggle)
+      DOM.confirmSubmitToggle.checked =
+        !!guardrails.confirmBeforeSubmitConfig.enabled;
+  }
 
   // Get active tab info
   refreshTabInfo();
@@ -409,6 +440,62 @@ DOM.logClear.addEventListener("click", () => {
   DOM.logContainer.innerHTML = "";
   addLog("Log cleared.", "info");
 });
+
+// ─── Guardrails Event Listeners ──────────────────────────────
+if (DOM.rateLimitToggle) {
+  DOM.rateLimitToggle.addEventListener("change", () => {
+    const enabled = DOM.rateLimitToggle.checked;
+    if (DOM.rateLimitSettings)
+      DOM.rateLimitSettings.style.display = enabled ? "block" : "none";
+    sendRuntimeMessage({
+      type: "UPDATE_GUARDRAILS",
+      rateLimitConfig: {
+        enabled,
+        maxCallsPerDomain: parseInt(DOM.rateLimitMax?.value || "100", 10),
+        windowMs: parseInt(DOM.rateLimitWindow?.value || "60000", 10),
+      },
+    });
+  });
+}
+
+if (DOM.rateLimitMax) {
+  DOM.rateLimitMax.addEventListener("change", () => {
+    if (DOM.rateLimitToggle?.checked) {
+      sendRuntimeMessage({
+        type: "UPDATE_GUARDRAILS",
+        rateLimitConfig: {
+          enabled: true,
+          maxCallsPerDomain: parseInt(DOM.rateLimitMax.value || "100", 10),
+          windowMs: parseInt(DOM.rateLimitWindow?.value || "60000", 10),
+        },
+      });
+    }
+  });
+}
+
+if (DOM.rateLimitWindow) {
+  DOM.rateLimitWindow.addEventListener("change", () => {
+    if (DOM.rateLimitToggle?.checked) {
+      sendRuntimeMessage({
+        type: "UPDATE_GUARDRAILS",
+        rateLimitConfig: {
+          enabled: true,
+          maxCallsPerDomain: parseInt(DOM.rateLimitMax?.value || "100", 10),
+          windowMs: parseInt(DOM.rateLimitWindow.value || "60000", 10),
+        },
+      });
+    }
+  });
+}
+
+if (DOM.confirmSubmitToggle) {
+  DOM.confirmSubmitToggle.addEventListener("change", () => {
+    sendRuntimeMessage({
+      type: "UPDATE_GUARDRAILS",
+      confirmBeforeSubmit: DOM.confirmSubmitToggle.checked,
+    });
+  });
+}
 
 // Listen for status updates
 chrome.runtime.onMessage.addListener((message) => {

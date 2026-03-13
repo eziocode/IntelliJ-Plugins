@@ -104,6 +104,227 @@ let sessionRecording = {
   maxActions: 1000,
 };
 
+// ─── Per-Domain Rate Limiter ─────────────────────────────────
+// Tracks tool calls per domain within a sliding time window.
+// Prevents infinite click loops and runaway automation.
+// Configuration is loaded from chrome.storage.local.
+let rateLimitConfig = {
+  enabled: false,
+  maxCallsPerDomain: 100, // max tool calls per domain per window
+  windowMs: 60000, // 1-minute sliding window
+  budgets: {}, // per-domain overrides: { "example.com": 50 }
+};
+
+// domainCallLog: Map<domain, Array<timestamp>>
+const domainCallLog = new Map();
+
+// Load rate limit config from storage on startup
+chrome.storage.local.get(["rateLimitConfig"], (stored) => {
+  if (stored.rateLimitConfig) {
+    rateLimitConfig = { ...rateLimitConfig, ...stored.rateLimitConfig };
+  }
+});
+
+// Listen for config changes from popup
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.rateLimitConfig) {
+    rateLimitConfig = {
+      ...rateLimitConfig,
+      ...changes.rateLimitConfig.newValue,
+    };
+    console.log("[AutoDOM] Rate limit config updated:", rateLimitConfig);
+  }
+});
+
+function getDomainFromTab(tab) {
+  try {
+    if (!tab || !tab.url) return null;
+    const url = new URL(tab.url);
+    return url.hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function checkRateLimit(domain) {
+  if (!rateLimitConfig.enabled || !domain) return { allowed: true };
+
+  const now = Date.now();
+  const windowStart = now - rateLimitConfig.windowMs;
+
+  // Get or create call log for this domain
+  let calls = domainCallLog.get(domain);
+  if (!calls) {
+    calls = [];
+    domainCallLog.set(domain, calls);
+  }
+
+  // Prune old entries outside the window
+  while (calls.length > 0 && calls[0] < windowStart) {
+    calls.shift();
+  }
+
+  // Determine budget for this domain
+  const budget =
+    rateLimitConfig.budgets[domain] || rateLimitConfig.maxCallsPerDomain;
+
+  if (calls.length >= budget) {
+    const oldestCall = calls[0];
+    const resetInMs = oldestCall + rateLimitConfig.windowMs - now;
+    return {
+      allowed: false,
+      domain,
+      callsInWindow: calls.length,
+      budget,
+      resetInMs,
+      error: `Rate limit exceeded for ${domain}: ${calls.length}/${budget} calls in ${rateLimitConfig.windowMs / 1000}s window. Resets in ${Math.ceil(resetInMs / 1000)}s.`,
+    };
+  }
+
+  // Record this call
+  calls.push(now);
+
+  return {
+    allowed: true,
+    domain,
+    callsInWindow: calls.length,
+    budget,
+    remaining: budget - calls.length,
+  };
+}
+
+// Periodic cleanup of stale domain entries (every 5 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [domain, calls] of domainCallLog) {
+    // Remove entries older than the window
+    while (calls.length > 0 && calls[0] < now - rateLimitConfig.windowMs) {
+      calls.shift();
+    }
+    // Remove empty domains
+    if (calls.length === 0) {
+      domainCallLog.delete(domain);
+    }
+  }
+}, 300000);
+
+// ─── Confirm-Before-Submit Mode ──────────────────────────────
+// When enabled, catches sensitive actions (form submissions, clicks on
+// purchase/checkout buttons, navigation to payment URLs) and requires
+// confirmation before executing. Works through the chat panel.
+let confirmBeforeSubmitConfig = {
+  enabled: false,
+  // URL patterns that trigger confirmation on navigate
+  sensitiveUrlPatterns: [
+    /checkout/i,
+    /payment/i,
+    /purchase/i,
+    /order/i,
+    /billing/i,
+    /subscribe/i,
+    /pay\b/i,
+    /cart/i,
+    /donate/i,
+    /transfer/i,
+  ],
+  // Button text patterns that trigger confirmation on click
+  sensitiveButtonPatterns: [
+    /submit/i,
+    /purchase/i,
+    /buy\s*now/i,
+    /place\s*order/i,
+    /confirm\s*order/i,
+    /pay\s*now/i,
+    /checkout/i,
+    /complete/i,
+    /subscribe/i,
+    /donate/i,
+    /send\s*payment/i,
+    /authorize/i,
+    /sign\s*up/i,
+    /register/i,
+    /delete\s*account/i,
+  ],
+};
+
+// Load confirm-before-submit config from storage
+chrome.storage.local.get(["confirmBeforeSubmitConfig"], (stored) => {
+  if (stored.confirmBeforeSubmitConfig) {
+    // Only merge the `enabled` flag — patterns stay hardcoded for safety
+    confirmBeforeSubmitConfig.enabled =
+      !!stored.confirmBeforeSubmitConfig.enabled;
+  }
+});
+
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.confirmBeforeSubmitConfig) {
+    confirmBeforeSubmitConfig.enabled =
+      !!changes.confirmBeforeSubmitConfig.newValue?.enabled;
+    console.log(
+      "[AutoDOM] Confirm-before-submit:",
+      confirmBeforeSubmitConfig.enabled ? "ON" : "OFF",
+    );
+  }
+});
+
+// Pending confirmations for the confirm-before-submit flow
+const pendingSubmitConfirmations = new Map();
+let submitConfirmIdCounter = 0;
+
+function isSensitiveAction(tool, params) {
+  if (!confirmBeforeSubmitConfig.enabled) return null;
+
+  // Check navigate to sensitive URLs
+  if (tool === "navigate" && params.url) {
+    const url = params.url.toLowerCase();
+    for (const pattern of confirmBeforeSubmitConfig.sensitiveUrlPatterns) {
+      if (pattern.test(url)) {
+        return {
+          reason: `Navigation to potentially sensitive URL matching "${pattern}"`,
+          url: params.url,
+        };
+      }
+    }
+  }
+
+  // Check fill_form — always sensitive
+  if (tool === "fill_form") {
+    return {
+      reason: "Form fill operation — may trigger submission of sensitive data",
+    };
+  }
+
+  // Check click on submit/purchase buttons
+  if ((tool === "click" || tool === "click_by_index") && params) {
+    // For CSS selector clicks, check if selector hints at submit
+    if (params.selector) {
+      const sel = params.selector.toLowerCase();
+      if (
+        sel.includes("submit") ||
+        sel.includes("checkout") ||
+        sel.includes("purchase") ||
+        sel.includes("payment")
+      ) {
+        return {
+          reason: `Click on element matching sensitive selector: "${params.selector}"`,
+        };
+      }
+    }
+    // For text-based clicks
+    if (params.text) {
+      for (const pattern of confirmBeforeSubmitConfig.sensitiveButtonPatterns) {
+        if (pattern.test(params.text)) {
+          return {
+            reason: `Click on button with sensitive text: "${params.text}"`,
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 // Sensitive data patterns to mask
 const SENSITIVE_PATTERNS = [
   { name: "credit_card", regex: /\b(?:\d{4}[- ]?){3}\d{4}\b/g },
@@ -587,6 +808,76 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // keeping the session alive while the user interacts via chat.
   // NOTE: Tool handlers execute locally via chrome.scripting/tabs APIs,
   // they do NOT require the MCP bridge server to be connected.
+  // ─── Confirm/Cancel Submit Actions ─────────────────────────
+  if (message.type === "CONFIRM_SUBMIT_ACTION") {
+    const pending = pendingSubmitConfirmations.get(message.confirmId);
+    if (!pending) {
+      sendResponse({
+        error: `No pending confirmation with id ${message.confirmId}`,
+      });
+      return false;
+    }
+    pendingSubmitConfirmations.delete(message.confirmId);
+    (async () => {
+      try {
+        const handler = TOOL_HANDLERS.get(pending.tool);
+        if (!handler) {
+          sendResponse({ error: `Unknown tool: ${pending.tool}` });
+          return;
+        }
+        const result = await handler(pending.params);
+        sendResponse({ confirmed: true, tool: pending.tool, result });
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === "CANCEL_SUBMIT_ACTION") {
+    const pending = pendingSubmitConfirmations.get(message.confirmId);
+    if (!pending) {
+      sendResponse({
+        error: `No pending confirmation with id ${message.confirmId}`,
+      });
+      return false;
+    }
+    pendingSubmitConfirmations.delete(message.confirmId);
+    sendResponse({ cancelled: true, tool: pending.tool });
+    return false;
+  }
+
+  if (message.type === "GET_GUARDRAILS_STATUS") {
+    sendResponse({
+      rateLimiting: {
+        enabled: rateLimitConfig.enabled,
+        maxCallsPerDomain: rateLimitConfig.maxCallsPerDomain,
+        windowMs: rateLimitConfig.windowMs,
+        activeDomains: domainCallLog.size,
+      },
+      confirmBeforeSubmit: {
+        enabled: confirmBeforeSubmitConfig.enabled,
+        pendingConfirmations: pendingSubmitConfirmations.size,
+      },
+    });
+    return false;
+  }
+
+  if (message.type === "UPDATE_GUARDRAILS") {
+    if (message.rateLimitConfig !== undefined) {
+      rateLimitConfig = { ...rateLimitConfig, ...message.rateLimitConfig };
+      chrome.storage.local.set({ rateLimitConfig });
+    }
+    if (message.confirmBeforeSubmit !== undefined) {
+      confirmBeforeSubmitConfig.enabled = !!message.confirmBeforeSubmit;
+      chrome.storage.local.set({
+        confirmBeforeSubmitConfig: { enabled: !!message.confirmBeforeSubmit },
+      });
+    }
+    sendResponse({ success: true });
+    return false;
+  }
+
   if (message.type === "CHAT_TOOL_CALL") {
     const { tool, params, requestId } = message;
     console.log(
@@ -982,6 +1273,56 @@ const TOOL_HANDLERS = new Map([
 async function handleToolCall(tool, params, id) {
   // Reset inactivity timer on every real tool call
   touchToolActivity();
+
+  // ─── Per-Domain Rate Limiting ────────────────────────────
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    const domain = getDomainFromTab(tab);
+    const rateCheck = checkRateLimit(domain);
+    if (!rateCheck.allowed) {
+      console.warn(`[AutoDOM] Rate limit blocked: ${tool} on ${domain}`);
+      return {
+        error: rateCheck.error,
+        rateLimited: true,
+        domain: rateCheck.domain,
+        callsInWindow: rateCheck.callsInWindow,
+        budget: rateCheck.budget,
+        resetInMs: rateCheck.resetInMs,
+      };
+    }
+  } catch (rlErr) {
+    // Don't block tool execution if rate limiting itself fails
+    console.warn("[AutoDOM] Rate limit check failed:", rlErr.message);
+  }
+
+  // ─── Confirm-Before-Submit Check ─────────────────────────
+  const sensitiveCheck = isSensitiveAction(tool, params);
+  if (sensitiveCheck) {
+    const confirmId = ++submitConfirmIdCounter;
+    pendingSubmitConfirmations.set(confirmId, {
+      tool,
+      params,
+      id,
+      reason: sensitiveCheck.reason,
+      timestamp: Date.now(),
+    });
+    // Auto-expire after 5 minutes
+    setTimeout(() => pendingSubmitConfirmations.delete(confirmId), 300000);
+
+    console.warn(
+      `[AutoDOM] Sensitive action held: ${tool} (confirmId=${confirmId})`,
+    );
+    return {
+      confirmRequired: true,
+      confirmId,
+      tool,
+      reason: sensitiveCheck.reason,
+      message: `⚠️ Sensitive action detected: ${sensitiveCheck.reason}. This action requires confirmation. Call with confirmId=${confirmId} to proceed.`,
+      params,
+    };
+  }
+
   try {
     const handler = TOOL_HANDLERS.get(tool);
     if (!handler) return { error: `Unknown tool: ${tool}` };
