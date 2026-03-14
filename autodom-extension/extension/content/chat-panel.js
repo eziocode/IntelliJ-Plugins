@@ -129,52 +129,48 @@
   const style = document.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
-    /* ─── Keyframes ────────────────────────────────────────────── */
-    @keyframes __autodom_fade_in {
-      from { opacity: 0; transform: scale(0.8); }
-      to { opacity: 0.9; transform: scale(1); }
+    /* ─── Tokens ───────────────────────────────────────────────── */
+    /* Dark-only panel injected into host pages — no light mode needed */
+    #${PANEL_ID},
+    #${INLINE_OVERLAY_ID} {
+      --c-bg:       #161618;
+      --c-surface:  #1e1e21;
+      --c-raised:   #262629;
+      --c-border:   #2e2e32;
+      --c-border-s: #3a3a3f;
+      --c-text:     #e4e4e7;
+      --c-text-2:   #a1a1a6;
+      --c-text-3:   #8e8e97;
+      --c-accent:   #e4e4e7;
+      --c-accent-muted: #3a3a3f;
+      --c-success:  #34d399;
+      --c-danger:   #f87171;
+      --c-warn:     #fbbf24;
+      --c-info:     #818cf8;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --radius: 8px;
     }
-    @keyframes __autodom_slide_up {
-      from { opacity: 0; transform: translateY(12px); }
-      to { opacity: 1; transform: translateY(0); }
+
+    /* ─── Keyframes (minimal, purposeful) ─────────────────────── */
+    @keyframes __autodom_slide_in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
-    @keyframes __autodom_gradient_shift {
-      0%   { background-position: 0% 50%; }
-      50%  { background-position: 100% 50%; }
-      100% { background-position: 0% 50%; }
-    }
-    @keyframes __autodom_shimmer {
-      0%   { opacity: 0.5; }
-      50%  { opacity: 1; }
-      100% { opacity: 0.5; }
-    }
-    @keyframes __autodom_welcome_float {
-      0%, 100% { transform: translateY(0); }
-      50%      { transform: translateY(-6px); }
-    }
-    @keyframes __autodom_glow_pulse {
-      0%, 100% { box-shadow: 0 0 12px rgba(139, 92, 246, 0.15), 0 0 0 0 rgba(139, 92, 246, 0); }
-      50%      { box-shadow: 0 0 20px rgba(139, 92, 246, 0.25), 0 0 40px rgba(139, 92, 246, 0.08); }
-    }
-    @keyframes __autodom_border_flow {
-      0%   { background-position: 0% 0%; }
-      100% { background-position: 200% 0%; }
+    @keyframes __autodom_typing {
+      0%, 60%, 100% { opacity: 0.25; }
+      30% { opacity: 1; }
     }
     @keyframes __autodom_dot_pulse {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
+      50% { opacity: 0.35; }
     }
-    @keyframes __autodom_typing {
-      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-      30% { transform: translateY(-5px); opacity: 1; }
-    }
-    @keyframes __autodom_msg_appear {
-      from { opacity: 0; transform: translateY(8px) scale(0.98); }
-      to   { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    @keyframes __autodom_sparkle_rotate {
-      from { transform: rotate(0deg); }
-      to   { transform: rotate(360deg); }
+    @media (prefers-reduced-motion: reduce) {
+      #${PANEL_ID} *,
+      #${INLINE_OVERLAY_ID} * {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
     }
 
     /* ─── Chat Panel (Sidebar) ────────────────────────────────── */
@@ -184,22 +180,21 @@
       right: 0;
       width: 400px;
       height: 100vh;
-      background: #0b0d14;
-      background-image:
-        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99, 102, 241, 0.08), transparent),
-        radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139, 92, 246, 0.06), transparent);
-      border-left: 1px solid rgba(139, 92, 246, 0.15);
+      background: var(--c-bg);
+      border-left: 1px solid var(--c-border);
       z-index: 2147483646;
       display: flex;
       flex-direction: column;
       overflow: visible;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       font-size: 13px;
-      color: #e2e8f0;
+      line-height: 1.5;
+      color: var(--c-text);
       transform: translateX(100%);
-      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-      box-shadow: -8px 0 40px rgba(0, 0, 0, 0.45), -2px 0 8px rgba(0, 0, 0, 0.2);
+      transition: transform 0.3s var(--ease-out);
+      box-shadow: -4px 0 24px rgba(0, 0, 0, 0.35);
       pointer-events: auto;
+      /* a11y: landmark role applied in HTML */
     }
     #${PANEL_ID}.open {
       transform: translateX(0);
@@ -210,86 +205,65 @@
       padding: 0;
     }
 
-    /* ─── Header (Glass Morphism) ─────────────────────────────── */
+    /* ─── Header ──────────────────────────────────────────────── */
     .autodom-chat-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 14px 10px 10px;
-      background: rgba(15, 17, 26, 0.75);
-      backdrop-filter: blur(20px) saturate(1.4);
-      -webkit-backdrop-filter: blur(20px) saturate(1.4);
-      border-bottom: 1px solid rgba(139, 92, 246, 0.12);
+      padding: 10px 12px;
+      background: var(--c-surface);
+      border-bottom: 1px solid var(--c-border);
       flex-shrink: 0;
-      gap: 8px;
+      gap: 6px;
       position: relative;
       overflow: visible;
-    }
-    /* Subtle animated gradient line at bottom of header */
-    .autodom-chat-header::after {
-      content: '';
-      position: absolute;
-      bottom: -1px;
-      left: 0;
-      right: 0;
-      height: 1px;
-      background: linear-gradient(90deg,
-        transparent,
-        rgba(139, 92, 246, 0.4),
-        rgba(59, 130, 246, 0.4),
-        rgba(139, 92, 246, 0.4),
-        transparent
-      );
-      background-size: 200% 100%;
-      animation: __autodom_border_flow 4s linear infinite;
+      min-height: 44px;
     }
     .autodom-chat-header-left {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex: 1;
       min-width: 0;
     }
 
-    /* Close Button — positioned at top-left, overflowing outside panel edge */
+    /* Close Button */
     .autodom-chat-close-btn {
       position: absolute;
       top: 10px;
-      left: -42px;
+      left: -48px;
       z-index: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 34px;
-      height: 34px;
-      background: rgba(30, 32, 45, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: rgba(255, 255, 255, 0.5);
+      width: 40px;
+      height: 40px;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border-s);
+      color: var(--c-text-2);
       cursor: pointer;
-      border-radius: 10px;
-      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      border-radius: var(--radius);
+      transition: color 0.15s ease, background-color 0.15s ease, opacity 0.2s ease;
       font-family: inherit;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
       opacity: 0;
       pointer-events: none;
+      /* a11y: 40×40 meets WCAG 2.5.8 Target Size minimum */
     }
     #${PANEL_ID}.open .autodom-chat-close-btn {
       opacity: 1;
       pointer-events: auto;
     }
     .autodom-chat-close-btn:hover {
-      background: rgba(239, 68, 68, 0.18);
-      border-color: rgba(239, 68, 68, 0.3);
-      color: #f87171;
-      transform: scale(1.08);
+      background: var(--c-raised);
+      color: var(--c-danger);
     }
-    .autodom-chat-close-btn:active {
-      transform: scale(0.92);
+    .autodom-chat-close-btn:focus-visible {
+      outline: 2px solid var(--c-accent);
+      outline-offset: 2px;
     }
     .autodom-chat-close-btn svg {
-      width: 18px;
-      height: 18px;
+      width: 16px;
+      height: 16px;
       fill: none;
       stroke: currentColor;
       stroke-width: 2.5;
@@ -299,60 +273,78 @@
 
     /* Logo */
     .autodom-chat-header-logo {
-      width: 26px;
-      height: 26px;
-      border-radius: 7px;
-      background: linear-gradient(135deg, #8b5cf6, #6366f1, #3b82f6);
-      background-size: 200% 200%;
-      animation: __autodom_gradient_shift 6s ease infinite;
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--c-accent);
       display: flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
     }
     .autodom-chat-header-logo svg {
-      width: 14px;
-      height: 14px;
+      width: 13px;
+      height: 13px;
       fill: none;
-      stroke: #fff;
+      stroke: var(--c-bg);
       stroke-width: 2.5;
     }
     .autodom-chat-header-title {
-      font-size: 14px;
-      font-weight: 800;
-      background: linear-gradient(135deg, #c4b5fd, #818cf8, #60a5fa);
-      background-size: 200% 200%;
-      animation: __autodom_gradient_shift 5s ease infinite;
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      letter-spacing: -0.2px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--c-text);
+      letter-spacing: -0.02em;
+      white-space: nowrap;
     }
 
-    /* Status Badge */
+    /* Status Badge — moved to header-right, acts as the single connection indicator */
     .autodom-chat-header-status {
       font-size: 9px;
       padding: 3px 8px;
-      border-radius: 20px;
-      font-weight: 700;
-      letter-spacing: 0.4px;
+      border-radius: 999px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
       text-transform: uppercase;
-      transition: all 0.3s ease;
+      border: 1px solid transparent;
+      transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+      white-space: nowrap;
+      flex-shrink: 0;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    /* BETA Badge — subtle, doesn't compete with status */
+    .autodom-chat-beta-badge {
+      font-size: 8px;
+      font-weight: 700;
+      color: var(--c-text-3);
+      background: var(--c-raised);
+      border: 1px solid var(--c-border-s);
+      padding: 2px 5px;
+      border-radius: 3px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
     }
     .autodom-chat-header-status.connected {
-      background: rgba(34, 197, 94, 0.12);
-      color: #4ade80;
-      box-shadow: 0 0 8px rgba(34, 197, 94, 0.15);
+      background: rgba(52, 211, 153, 0.1);
+      border-color: rgba(52, 211, 153, 0.2);
+      color: var(--c-success);
     }
     .autodom-chat-header-status.direct {
-      background: rgba(99, 102, 241, 0.12);
-      color: #818cf8;
-      box-shadow: 0 0 8px rgba(99, 102, 241, 0.15);
+      background: rgba(129, 140, 248, 0.1);
+      border-color: rgba(129, 140, 248, 0.2);
+      color: var(--c-info);
     }
     .autodom-chat-header-status.disconnected {
-      background: rgba(239, 68, 68, 0.1);
-      color: #f87171;
+      background: rgba(248, 113, 113, 0.1);
+      border-color: rgba(248, 113, 113, 0.15);
+      color: var(--c-danger);
     }
     .autodom-chat-header-actions {
       display: flex;
@@ -362,17 +354,24 @@
     .autodom-chat-header-btn {
       background: none;
       border: none;
-      color: #475569;
+      color: var(--c-text-3);
       cursor: pointer;
       padding: 6px;
       border-radius: 6px;
-      transition: all 0.2s ease;
+      transition: color 0.15s ease, background-color 0.15s ease;
       display: flex;
       align-items: center;
+      min-width: 32px;
+      min-height: 32px;
+      justify-content: center;
     }
     .autodom-chat-header-btn:hover {
-      color: #c4b5fd;
-      background: rgba(139, 92, 246, 0.1);
+      color: var(--c-text);
+      background: var(--c-raised);
+    }
+    .autodom-chat-header-btn:focus-visible {
+      outline: 2px solid var(--c-accent);
+      outline-offset: 2px;
     }
     .autodom-chat-header-btn svg {
       width: 15px;
@@ -382,45 +381,38 @@
       stroke-width: 2;
     }
 
-    /* AI Badge */
+    /* AI Badge — hidden to reduce header density; info already conveyed by status badge */
     .autodom-ai-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 8px;
-      font-weight: 700;
-      color: #c4b5fd;
-      background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(99, 102, 241, 0.1));
-      border: 1px solid rgba(139, 92, 246, 0.2);
-      padding: 2px 6px;
-      border-radius: 5px;
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
+      display: none;
     }
     .autodom-ai-badge svg {
       width: 9px;
       height: 9px;
       fill: none;
-      stroke: #c4b5fd;
+      stroke: currentColor;
       stroke-width: 2;
     }
 
     /* ─── Context Bar ─────────────────────────────────────────── */
+    /* Removed redundant MCP indicator — status badge in header is sufficient */
     .autodom-chat-context {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 7px 16px;
-      background: rgba(15, 17, 26, 0.6);
-      border-bottom: 1px solid rgba(148, 163, 184, 0.05);
+      padding: 8px 14px;
+      background: var(--c-surface);
+      border-bottom: 1px solid var(--c-border);
       font-size: 11px;
-      color: #64748b;
+      color: var(--c-text-2);
       flex-shrink: 0;
       overflow: hidden;
+      min-height: 34px;
     }
     .autodom-chat-context-icon {
       flex-shrink: 0;
-      opacity: 0.4;
+      opacity: 0.5;
+      display: flex;
+      align-items: center;
     }
     .autodom-chat-context-icon svg {
       width: 12px;
@@ -428,6 +420,7 @@
       fill: none;
       stroke: currentColor;
       stroke-width: 2;
+      display: block;
     }
     .autodom-chat-context-text {
       white-space: nowrap;
@@ -435,116 +428,93 @@
       text-overflow: ellipsis;
       flex: 1;
       font-weight: 500;
+      line-height: 1.3;
     }
     .autodom-chat-context-mcp {
-      flex-shrink: 0;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 9px;
-      font-weight: 700;
-      color: #4ade80;
-      background: rgba(34, 197, 94, 0.08);
-      border: 1px solid rgba(34, 197, 94, 0.12);
-      padding: 2px 8px;
-      border-radius: 20px;
-      letter-spacing: 0.3px;
-      text-transform: uppercase;
+      display: none;
     }
     .autodom-chat-context-mcp .dot {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: #4ade80;
-      animation: __autodom_dot_pulse 2s ease-in-out infinite;
-      box-shadow: 0 0 6px rgba(74, 222, 128, 0.4);
+      display: none;
     }
 
     /* ─── Messages ────────────────────────────────────────────── */
     .autodom-chat-messages {
       flex: 1;
       overflow-y: auto;
-      padding: 16px;
+      padding: 14px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
       scroll-behavior: smooth;
     }
     .autodom-chat-messages::-webkit-scrollbar {
-      width: 3px;
+      width: 4px;
     }
     .autodom-chat-messages::-webkit-scrollbar-track {
       background: transparent;
     }
     .autodom-chat-messages::-webkit-scrollbar-thumb {
-      background: rgba(139, 92, 246, 0.15);
-      border-radius: 4px;
-    }
-    .autodom-chat-messages::-webkit-scrollbar-thumb:hover {
-      background: rgba(139, 92, 246, 0.3);
+      background: var(--c-border-s);
+      border-radius: 2px;
     }
 
     .autodom-chat-msg {
       max-width: 88%;
       padding: 10px 14px;
-      border-radius: 14px;
-      line-height: 1.6;
+      border-radius: 12px;
+      line-height: 1.55;
       font-size: 13px;
       word-wrap: break-word;
       white-space: pre-wrap;
-      animation: __autodom_msg_appear 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      animation: __autodom_slide_in 0.2s var(--ease-out);
       position: relative;
     }
 
     /* User message */
     .autodom-chat-msg.user {
       align-self: flex-end;
-      background: linear-gradient(135deg, #7c3aed, #6366f1, #4f46e5);
-      background-size: 200% 200%;
-      color: #fff;
-      border-bottom-right-radius: 4px;
-      box-shadow: 0 2px 12px rgba(99, 102, 241, 0.2);
-      font-weight: 450;
+      background: var(--c-accent);
+      color: var(--c-bg);
+      border-bottom-right-radius: 3px;
+      font-weight: 500;
     }
 
     /* Assistant message */
     .autodom-chat-msg.assistant {
       align-self: flex-start;
-      background: rgba(22, 25, 38, 0.9);
-      border: 1px solid rgba(148, 163, 184, 0.07);
-      color: #cbd5e1;
-      border-bottom-left-radius: 4px;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      color: var(--c-text);
+      border-bottom-left-radius: 3px;
     }
 
     /* AI response */
     .autodom-chat-msg.ai-response {
       align-self: flex-start;
-      background: linear-gradient(135deg, rgba(22, 25, 40, 0.95), rgba(35, 28, 58, 0.85));
-      border: 1px solid rgba(139, 92, 246, 0.12);
-      color: #e2e8f0;
-      border-bottom-left-radius: 4px;
-      position: relative;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      color: var(--c-text);
+      border-bottom-left-radius: 3px;
     }
     .autodom-chat-msg.ai-response::before {
       content: '✦';
       position: absolute;
       top: -9px;
       left: 10px;
-      font-size: 13px;
-      color: #a78bfa;
-      text-shadow: 0 0 10px rgba(167, 139, 250, 0.6);
-      animation: __autodom_shimmer 2s ease-in-out infinite;
+      font-size: 10px;
+      color: var(--c-text-3);
+      line-height: 1;
     }
 
     /* System message */
     .autodom-chat-msg.system {
       align-self: center;
-      background: rgba(245, 158, 11, 0.06);
-      border: 1px solid rgba(245, 158, 11, 0.12);
-      color: #fbbf24;
+      background: rgba(251, 191, 36, 0.08);
+      border: 1px solid rgba(251, 191, 36, 0.15);
+      color: var(--c-warn);
       font-size: 11px;
-      padding: 6px 14px;
-      border-radius: 20px;
+      padding: 5px 14px;
+      border-radius: 999px;
       text-align: center;
       font-weight: 500;
     }
@@ -552,12 +522,12 @@
     /* Error message */
     .autodom-chat-msg.error {
       align-self: center;
-      background: rgba(239, 68, 68, 0.06);
-      border: 1px solid rgba(239, 68, 68, 0.12);
-      color: #f87171;
+      background: rgba(248, 113, 113, 0.08);
+      border: 1px solid rgba(248, 113, 113, 0.15);
+      color: var(--c-danger);
       font-size: 11px;
-      padding: 6px 14px;
-      border-radius: 20px;
+      padding: 5px 14px;
+      border-radius: 999px;
       text-align: center;
       font-weight: 500;
     }
@@ -565,47 +535,52 @@
     /* Tool result */
     .autodom-chat-msg.tool-result {
       align-self: flex-start;
-      background: rgba(11, 13, 20, 0.95);
-      border: 1px solid rgba(99, 102, 241, 0.1);
-      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+      background: var(--c-bg);
+      border: 1px solid var(--c-border);
+      font-family: var(--mono);
       font-size: 11px;
-      color: #94a3b8;
+      color: var(--c-text-2);
       max-height: 200px;
       overflow-y: auto;
-      border-radius: 10px;
+      border-radius: var(--radius);
     }
     .autodom-chat-msg .tool-name {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(139, 92, 246, 0.08));
-      color: #a5b4fc;
+      background: var(--c-raised);
+      border: 1px solid var(--c-border);
+      color: var(--c-text-2);
       padding: 2px 8px;
-      border-radius: 5px;
+      border-radius: 4px;
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 600;
       margin-bottom: 6px;
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      letter-spacing: 0.3px;
+      font-family: var(--mono);
+      letter-spacing: 0.02em;
     }
     .autodom-chat-msg .ai-tool-calls {
       margin-top: 8px;
       padding-top: 8px;
-      border-top: 1px solid rgba(139, 92, 246, 0.08);
+      border-top: 1px solid var(--c-border);
       font-size: 11px;
-      color: #64748b;
+      color: var(--c-text-3);
     }
     .autodom-chat-msg .ai-tool-call-item {
       display: flex;
       align-items: center;
       gap: 5px;
       padding: 3px 0;
-      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-family: var(--mono);
       font-size: 10px;
+      line-height: 1.4;
     }
     .autodom-chat-msg .ai-tool-call-item .tool-icon {
-      color: #4ade80;
+      color: var(--c-success);
       font-size: 11px;
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
     }
 
     /* ─── Typing Indicator ────────────────────────────────────── */
@@ -614,30 +589,30 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 10px 16px;
-      background: linear-gradient(135deg, rgba(22, 25, 40, 0.95), rgba(35, 28, 58, 0.8));
-      border: 1px solid rgba(139, 92, 246, 0.1);
-      border-radius: 14px;
-      border-bottom-left-radius: 4px;
-      animation: __autodom_glow_pulse 3s ease-in-out infinite;
+      padding: 10px 14px;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      border-radius: 12px;
+      border-bottom-left-radius: 3px;
+      min-height: 40px;
     }
     .autodom-chat-typing .ai-thinking-label {
       font-size: 11px;
-      color: #c4b5fd;
-      font-weight: 600;
-      letter-spacing: 0.2px;
+      color: var(--c-text-2);
+      font-weight: 500;
+      line-height: 1;
     }
     .autodom-chat-typing .dots {
       display: flex;
+      align-items: center;
       gap: 4px;
     }
     .autodom-chat-typing .dots span {
-      width: 6px;
-      height: 6px;
+      width: 5px;
+      height: 5px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #a78bfa, #818cf8);
+      background: var(--c-text-3);
       animation: __autodom_typing 1.4s ease-in-out infinite;
-      box-shadow: 0 0 4px rgba(167, 139, 250, 0.4);
     }
     .autodom-chat-typing .dots span:nth-child(2) { animation-delay: 0.2s; }
     .autodom-chat-typing .dots span:nth-child(3) { animation-delay: 0.4s; }
@@ -645,45 +620,52 @@
     /* ─── Quick Actions ───────────────────────────────────────── */
     .autodom-chat-quick-actions {
       display: flex;
+      align-items: center;
       gap: 6px;
       padding: 8px 14px;
-      border-top: 1px solid rgba(139, 92, 246, 0.06);
-      background: rgba(11, 13, 20, 0.6);
+      border-top: 1px solid var(--c-border);
+      background: var(--c-surface);
       overflow-x: auto;
       flex-shrink: 0;
+      -webkit-mask-image: linear-gradient(to right, #000 85%, transparent 100%);
+      mask-image: linear-gradient(to right, #000 85%, transparent 100%);
     }
     .autodom-chat-quick-actions::-webkit-scrollbar {
       height: 0;
     }
     .autodom-chat-quick-btn {
       flex-shrink: 0;
-      padding: 5px 12px;
-      border-radius: 20px;
-      background: rgba(139, 92, 246, 0.06);
-      border: 1px solid rgba(139, 92, 246, 0.1);
-      color: #a5b4fc;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: var(--c-raised);
+      border: 1px solid var(--c-border);
+      color: var(--c-text-2);
       font-size: 11px;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
       font-family: inherit;
       white-space: nowrap;
+      line-height: 1.3;
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
     }
     .autodom-chat-quick-btn:hover {
-      background: rgba(139, 92, 246, 0.14);
-      border-color: rgba(139, 92, 246, 0.3);
-      color: #c4b5fd;
-      transform: translateY(-1px);
-      box-shadow: 0 3px 12px rgba(139, 92, 246, 0.15);
+      background: var(--c-border-s);
+      border-color: var(--c-border-s);
+      color: var(--c-text);
+    }
+    .autodom-chat-quick-btn:focus-visible {
+      outline: 2px solid var(--c-accent);
+      outline-offset: 2px;
     }
     .autodom-chat-quick-btn:active {
-      transform: translateY(0) scale(0.97);
+      opacity: 0.8;
     }
     .autodom-chat-quick-btn:disabled {
       opacity: 0.3;
       cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
     }
 
     /* ─── Input Area ──────────────────────────────────────────── */
@@ -691,85 +673,67 @@
       display: flex;
       align-items: flex-end;
       gap: 8px;
-      padding: 12px 14px 14px;
-      background: rgba(11, 13, 20, 0.8);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
+      padding: 10px 14px;
+      background: var(--c-surface);
+      border-top: 1px solid var(--c-border);
       flex-shrink: 0;
-      position: relative;
-    }
-    /* Top border glow */
-    .autodom-chat-input-area::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 16px;
-      right: 16px;
-      height: 1px;
-      background: linear-gradient(90deg,
-        transparent,
-        rgba(139, 92, 246, 0.2),
-        rgba(99, 102, 241, 0.15),
-        transparent
-      );
+      /* a11y: textarea and send button both ≥40px touch targets */
     }
     .autodom-chat-input {
       flex: 1;
       min-height: 40px;
       max-height: 120px;
-      padding: 10px 14px;
-      background: rgba(22, 25, 38, 0.7);
-      border: 1px solid rgba(139, 92, 246, 0.1);
-      border-radius: 12px;
-      color: #e2e8f0;
+      padding: 9px 12px;
+      background: var(--c-bg);
+      border: 1px solid var(--c-border-s);
+      border-radius: var(--radius);
+      color: var(--c-text);
       font-family: inherit;
       font-size: 13px;
       line-height: 1.45;
       resize: none;
       outline: none;
-      transition: all 0.25s ease;
+      transition: border-color 0.15s ease;
     }
     .autodom-chat-input:focus {
-      border-color: rgba(139, 92, 246, 0.4);
-      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.08), 0 0 20px rgba(139, 92, 246, 0.06);
-      background: rgba(22, 25, 38, 0.9);
+      border-color: var(--c-text-3);
     }
     .autodom-chat-input::placeholder {
-      color: #3e4254;
-      font-weight: 450;
+      color: var(--c-text-3);
     }
     .autodom-chat-send-btn {
       width: 40px;
       height: 40px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #8b5cf6, #6366f1);
-      border: none;
+      border-radius: var(--radius);
+      background: var(--c-accent-muted);
+      border: 1px solid var(--c-border-s);
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: background-color 0.15s ease, border-color 0.15s ease;
       flex-shrink: 0;
-      box-shadow: 0 2px 10px rgba(139, 92, 246, 0.25);
     }
     .autodom-chat-send-btn:hover {
-      transform: scale(1.08);
-      box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+      background: var(--c-border-s);
+      border-color: var(--c-text-3);
     }
     .autodom-chat-send-btn:active {
-      transform: scale(0.95);
+      background: var(--c-raised);
     }
     .autodom-chat-send-btn:disabled {
-      opacity: 0.3;
+      opacity: 0.25;
       cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
+    }
+    .autodom-chat-send-btn:focus-visible {
+      outline: 2px solid var(--c-accent);
+      outline-offset: 2px;
     }
     .autodom-chat-send-btn svg {
       width: 16px;
       height: 16px;
       fill: none;
-      stroke: #fff;
+      stroke: var(--c-text);
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
@@ -782,106 +746,87 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 14px;
-      padding: 32px 24px;
+      gap: 0;
+      padding: 40px 24px 32px;
       text-align: center;
     }
     .autodom-chat-welcome-icon {
-      width: 64px;
-      height: 64px;
-      border-radius: 18px;
-      background: linear-gradient(135deg, rgba(139, 92, 246, 0.15), rgba(99, 102, 241, 0.08));
-      border: 1px solid rgba(139, 92, 246, 0.12);
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: var(--c-raised);
+      border: 1px solid var(--c-border-s);
       display: flex;
       align-items: center;
       justify-content: center;
-      margin-bottom: 4px;
-      animation: __autodom_welcome_float 4s ease-in-out infinite;
-      position: relative;
+      margin-bottom: 16px;
     }
-    /* Outer glow ring */
     .autodom-chat-welcome-icon::before {
-      content: '';
-      position: absolute;
-      inset: -4px;
-      border-radius: 22px;
-      border: 1px solid rgba(139, 92, 246, 0.08);
-      animation: __autodom_glow_pulse 3s ease-in-out infinite;
+      display: none;
     }
     .autodom-chat-welcome-icon svg {
-      width: 30px;
-      height: 30px;
+      width: 18px;
+      height: 18px;
       fill: none;
-      stroke: #a78bfa;
+      stroke: var(--c-text-3);
       stroke-width: 1.5;
-      filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.4));
     }
     .autodom-chat-welcome h3 {
-      font-size: 17px;
-      font-weight: 800;
-      background: linear-gradient(135deg, #e2e8f0, #c4b5fd);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      letter-spacing: -0.3px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--c-text);
+      letter-spacing: -0.01em;
+      margin-bottom: 6px;
     }
     .autodom-chat-welcome p {
       font-size: 12px;
-      color: #475569;
+      color: var(--c-text-3);
       line-height: 1.6;
-      max-width: 280px;
-      font-weight: 450;
+      max-width: 240px;
+      margin-bottom: 20px;
     }
     .autodom-chat-welcome .shortcut-hint {
       display: inline-flex;
       align-items: center;
       gap: 5px;
       font-size: 10px;
-      color: #3e4254;
-      background: rgba(22, 25, 38, 0.8);
+      color: var(--c-text-2);
+      background: var(--c-surface);
       padding: 6px 12px;
-      border-radius: 8px;
-      border: 1px solid rgba(139, 92, 246, 0.08);
-      margin-top: 6px;
+      border-radius: 6px;
+      border: 1px solid var(--c-border);
       font-weight: 500;
     }
     .autodom-chat-welcome .shortcut-hint kbd {
-      font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 9px;
-      background: rgba(139, 92, 246, 0.12);
+      background: var(--c-raised);
       padding: 2px 5px;
-      border-radius: 4px;
-      color: #a5b4fc;
-      border: 1px solid rgba(139, 92, 246, 0.1);
+      border-radius: 3px;
+      color: var(--c-text-2);
+      border: 1px solid var(--c-border-s);
     }
 
     /* ─── Footer ──────────────────────────────────────────────── */
     .autodom-chat-footer {
-      padding: 6px 16px;
+      padding: 5px 14px;
       text-align: center;
       font-size: 10px;
-      color: #1e2030;
-      border-top: 1px solid rgba(139, 92, 246, 0.04);
+      color: var(--c-text-3);
+      border-top: 1px solid var(--c-border);
       flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
-      background: rgba(11, 13, 20, 0.5);
+      gap: 4px;
+      background: var(--c-surface);
+      line-height: 1;
     }
     .autodom-chat-footer .ai-powered {
-      display: inline-flex;
-      align-items: center;
-      gap: 3px;
-      color: #334155;
+      display: none;
     }
     .autodom-chat-footer .ai-powered svg {
-      width: 10px;
-      height: 10px;
-      fill: none;
-      stroke: #7c3aed;
-      stroke-width: 2;
-      animation: __autodom_sparkle_rotate 8s linear infinite;
+      display: none;
     }
 
     /* ─── Inline Overlay (Spotlight-style) ─────────────────────── */
@@ -889,25 +834,18 @@
       position: fixed;
       top: 50%;
       left: 50%;
-      transform: translate(-50%, -50%) scale(0.92);
-      width: 580px;
+      transform: translate(-50%, -50%) scale(0.96);
+      width: 560px;
       max-width: 90vw;
-      background: rgba(11, 13, 20, 0.97);
-      background-image:
-        radial-gradient(ellipse 100% 60% at 50% 0%, rgba(139, 92, 246, 0.08), transparent),
-        radial-gradient(ellipse 80% 50% at 50% 100%, rgba(59, 130, 246, 0.05), transparent);
-      border: 1px solid rgba(139, 92, 246, 0.2);
-      border-radius: 20px;
-      box-shadow:
-        0 25px 60px rgba(0, 0, 0, 0.6),
-        0 0 0 1px rgba(139, 92, 246, 0.08),
-        0 0 100px rgba(139, 92, 246, 0.1),
-        inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      background: var(--c-bg);
+      border: 1px solid var(--c-border-s);
+      border-radius: 14px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.1);
       z-index: 2147483647;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: opacity 0.2s ease, transform 0.2s var(--ease-out);
       overflow: hidden;
     }
     #${INLINE_OVERLAY_ID}.visible {
@@ -924,36 +862,30 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 14px 18px 8px;
+      padding: 14px 16px 8px;
       font-size: 12px;
-      color: #475569;
+      color: var(--c-text-3);
     }
     .autodom-inline-header .logo {
       width: 22px;
       height: 22px;
-      border-radius: 6px;
-      background: linear-gradient(135deg, #8b5cf6, #6366f1, #3b82f6);
-      background-size: 200% 200%;
-      animation: __autodom_gradient_shift 6s ease infinite;
+      border-radius: 5px;
+      background: var(--c-accent);
       display: flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      box-shadow: 0 2px 8px rgba(139, 92, 246, 0.25);
     }
     .autodom-inline-header .logo svg {
       width: 12px;
       height: 12px;
       fill: none;
-      stroke: #fff;
+      stroke: var(--c-bg);
       stroke-width: 2.5;
     }
     .autodom-inline-header .title {
       font-weight: 700;
-      background: linear-gradient(135deg, #c4b5fd, #818cf8);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      color: var(--c-text);
     }
     .autodom-inline-header .mcp-status {
       margin-left: auto;
@@ -961,84 +893,88 @@
       align-items: center;
       gap: 5px;
       font-size: 10px;
-      color: #4ade80;
+      color: var(--c-success);
       font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
     }
     .autodom-inline-header .mcp-status .dot {
       width: 5px;
       height: 5px;
       border-radius: 50%;
-      background: #4ade80;
-      box-shadow: 0 0 6px rgba(74, 222, 128, 0.4);
+      background: var(--c-success);
       animation: __autodom_dot_pulse 2s ease-in-out infinite;
     }
     .autodom-inline-input-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 18px 14px;
+      padding: 8px 16px 14px;
     }
     .autodom-inline-input {
       flex: 1;
       height: 44px;
       padding: 0 14px;
-      background: rgba(22, 25, 38, 0.6);
-      border: 1px solid rgba(139, 92, 246, 0.1);
-      border-radius: 12px;
-      color: #e2e8f0;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border-s);
+      border-radius: var(--radius);
+      color: var(--c-text);
       font-family: inherit;
       font-size: 14px;
       outline: none;
-      transition: all 0.25s ease;
+      transition: border-color 0.15s ease;
     }
     .autodom-inline-input:focus {
-      border-color: rgba(139, 92, 246, 0.4);
-      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.08), 0 0 20px rgba(139, 92, 246, 0.06);
-      background: rgba(22, 25, 38, 0.9);
+      border-color: var(--c-text-3);
     }
     .autodom-inline-input::placeholder {
-      color: #3e4254;
-      font-weight: 450;
+      color: var(--c-text-3);
     }
     .autodom-inline-send {
       width: 44px;
       height: 44px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #8b5cf6, #6366f1);
-      border: none;
+      border-radius: var(--radius);
+      background: var(--c-accent-muted);
+      border: 1px solid var(--c-border-s);
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: background-color 0.15s ease, border-color 0.15s ease;
       flex-shrink: 0;
-      box-shadow: 0 2px 10px rgba(139, 92, 246, 0.3);
     }
     .autodom-inline-send:hover {
-      transform: scale(1.08);
-      box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+      background: var(--c-border-s);
+      border-color: var(--c-text-3);
     }
     .autodom-inline-send:active {
-      transform: scale(0.95);
+      background: var(--c-raised);
     }
     .autodom-inline-send:disabled {
-      opacity: 0.3;
+      opacity: 0.25;
       cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
+    }
+    .autodom-inline-send:focus-visible {
+      outline: 2px solid var(--c-accent);
+      outline-offset: 2px;
+    }
+    /* a11y: visible focus for inline hint buttons */
+    .autodom-inline-hint:focus-visible {
+      outline: 2px solid var(--c-accent);
+      outline-offset: 2px;
     }
     .autodom-inline-send svg {
       width: 16px;
       height: 16px;
       fill: none;
-      stroke: #fff;
+      stroke: var(--c-text);
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
     }
     .autodom-inline-response {
       display: none;
-      padding: 0 18px 14px;
+      padding: 0 16px 14px;
       max-height: 300px;
       overflow-y: auto;
     }
@@ -1046,70 +982,76 @@
       display: block;
     }
     .autodom-inline-response-content {
-      background: rgba(22, 25, 38, 0.6);
-      border: 1px solid rgba(139, 92, 246, 0.08);
-      border-radius: 12px;
+      background: var(--c-surface);
+      border: 1px solid var(--c-border);
+      border-radius: var(--radius);
       padding: 14px;
       font-size: 13px;
-      color: #e2e8f0;
-      line-height: 1.6;
+      color: var(--c-text);
+      line-height: 1.55;
       white-space: pre-wrap;
       word-wrap: break-word;
     }
     .autodom-inline-response-content .ai-sparkle {
-      color: #a78bfa;
+      color: var(--c-text-3);
       margin-right: 4px;
     }
     .autodom-inline-response::-webkit-scrollbar {
-      width: 3px;
+      width: 4px;
     }
     .autodom-inline-response::-webkit-scrollbar-thumb {
-      background: rgba(139, 92, 246, 0.15);
-      border-radius: 4px;
+      background: var(--c-border-s);
+      border-radius: 2px;
     }
     .autodom-inline-hints {
       display: flex;
+      align-items: center;
       gap: 6px;
-      padding: 0 18px 12px;
+      padding: 0 16px 12px;
       overflow-x: auto;
     }
     .autodom-inline-hints::-webkit-scrollbar { height: 0; }
     .autodom-inline-hint {
       flex-shrink: 0;
-      padding: 4px 10px;
-      border-radius: 20px;
-      background: rgba(139, 92, 246, 0.06);
-      border: 1px solid rgba(139, 92, 246, 0.1);
-      color: #a5b4fc;
+      padding: 5px 10px;
+      border-radius: 6px;
+      background: var(--c-raised);
+      border: 1px solid var(--c-border);
+      color: var(--c-text-2);
       font-size: 10px;
       font-weight: 500;
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
       font-family: inherit;
       white-space: nowrap;
+      line-height: 1.3;
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
     }
     .autodom-inline-hint:hover {
-      background: rgba(139, 92, 246, 0.12);
-      border-color: rgba(139, 92, 246, 0.25);
-      color: #c4b5fd;
-      transform: translateY(-1px);
+      background: var(--c-border-s);
+      border-color: var(--c-border-s);
+      color: var(--c-text);
     }
     .autodom-inline-footer {
-      padding: 8px 18px 10px;
+      padding: 8px 16px 10px;
       text-align: center;
       font-size: 10px;
-      color: #1e2030;
-      border-top: 1px solid rgba(139, 92, 246, 0.06);
-      background: rgba(11, 13, 20, 0.4);
+      color: var(--c-text-3);
+      border-top: 1px solid var(--c-border);
+      background: var(--c-surface);
+      letter-spacing: 0.01em;
     }
     .autodom-inline-footer kbd {
-      font-family: 'SF Mono', 'JetBrains Mono', monospace;
+      font-family: var(--mono);
       font-size: 9px;
-      background: rgba(139, 92, 246, 0.1);
-      padding: 2px 5px;
-      border-radius: 4px;
-      color: #475569;
-      border: 1px solid rgba(139, 92, 246, 0.08);
+      background: var(--c-raised);
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: var(--c-text-2);
+      border: 1px solid var(--c-border-s);
+      margin: 0 1px;
     }
 
     /* Backdrop for inline overlay */
@@ -1117,12 +1059,10 @@
       position: fixed;
       inset: 0;
       background: rgba(0, 0, 0, 0.5);
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
       z-index: 2147483646;
       opacity: 0;
       pointer-events: none;
-      transition: opacity 0.25s ease;
+      transition: opacity 0.2s ease;
     }
     .autodom-inline-backdrop.visible {
       opacity: 1;
@@ -1132,39 +1072,39 @@
     /* ─── Confirmation Prompt (Guardrails) ─────────────────── */
     .autodom-chat-msg.confirm-prompt {
       align-self: flex-start;
-      background: linear-gradient(135deg, rgba(30, 25, 15, 0.95), rgba(45, 35, 18, 0.85));
-      border: 1px solid rgba(245, 158, 11, 0.25);
-      color: #e2e8f0;
-      border-radius: 14px;
-      border-bottom-left-radius: 4px;
+      background: var(--c-surface);
+      border: 1px solid rgba(251, 191, 36, 0.25);
+      color: var(--c-text);
+      border-radius: 12px;
+      border-bottom-left-radius: 3px;
       padding: 14px 16px;
       max-width: 92%;
-      animation: __autodom_msg_appear 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      animation: __autodom_slide_in 0.2s var(--ease-out);
     }
     .confirm-prompt-icon {
-      font-size: 20px;
+      font-size: 18px;
       margin-bottom: 6px;
     }
     .confirm-prompt-title {
       font-size: 13px;
       font-weight: 700;
-      color: #fbbf24;
+      color: var(--c-warn);
       margin-bottom: 6px;
-      letter-spacing: -0.1px;
     }
     .confirm-prompt-reason {
       font-size: 12px;
-      color: #cbd5e1;
+      color: var(--c-text-2);
       line-height: 1.55;
       margin-bottom: 8px;
     }
     .confirm-prompt-details {
       font-size: 10px;
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      color: #64748b;
-      background: rgba(0, 0, 0, 0.25);
+      font-family: var(--mono);
+      color: var(--c-text-3);
+      background: var(--c-bg);
+      border: 1px solid var(--c-border);
       padding: 4px 8px;
-      border-radius: 6px;
+      border-radius: 4px;
       margin-bottom: 12px;
     }
     .confirm-prompt-buttons {
@@ -1174,40 +1114,41 @@
     .confirm-prompt-btn {
       flex: 1;
       padding: 8px 14px;
-      border-radius: 8px;
+      border-radius: 6px;
       font-family: inherit;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
       border: none;
-      transition: all 0.2s ease;
+      transition: opacity 0.15s ease, background-color 0.15s ease;
+      min-height: 36px;
     }
     .confirm-prompt-btn.confirm {
-      background: linear-gradient(135deg, #22c55e, #16a34a);
-      color: #fff;
-      box-shadow: 0 2px 8px rgba(34, 197, 94, 0.25);
+      background: var(--c-success);
+      color: #0d1117;
     }
     .confirm-prompt-btn.confirm:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 16px rgba(34, 197, 94, 0.35);
+      opacity: 0.85;
     }
     .confirm-prompt-btn.cancel {
-      background: rgba(239, 68, 68, 0.12);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.2);
+      background: transparent;
+      color: var(--c-danger);
+      border: 1px solid rgba(248, 113, 113, 0.25);
     }
     .confirm-prompt-btn.cancel:hover {
-      background: rgba(239, 68, 68, 0.2);
-      border-color: rgba(239, 68, 68, 0.35);
+      background: rgba(248, 113, 113, 0.08);
+    }
+    .confirm-prompt-btn:focus-visible {
+      outline: 2px solid var(--c-accent);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(228, 228, 231, 0.15);
     }
     .confirm-prompt-btn:disabled {
-      opacity: 0.4;
+      opacity: 0.35;
       cursor: not-allowed;
-      transform: none !important;
-      box-shadow: none !important;
     }
     .confirm-prompt-btn:active {
-      transform: scale(0.97);
+      opacity: 0.7;
     }
 
     /* Responsive: narrow screens */
@@ -1218,13 +1159,20 @@
       .autodom-chat-close-btn {
         left: auto;
         right: 8px;
-        top: -42px;
-        background: rgba(0, 0, 0, 0.6);
-        border-color: rgba(255, 255, 255, 0.12);
+        top: -48px;
+        background: var(--c-surface);
+        border-color: var(--c-border-s);
       }
       #${INLINE_OVERLAY_ID} {
         width: 95vw;
-        border-radius: 14px;
+        border-radius: 10px;
+      }
+      .autodom-chat-quick-btn {
+        min-height: 44px;
+        padding: 8px 12px;
+      }
+      .confirm-prompt-btn {
+        min-height: 44px;
       }
     }
   `;
@@ -1236,62 +1184,64 @@
   // ─── Chat Panel ────────────────────────────────────────────
   const panel = document.createElement("div");
   panel.id = PANEL_ID;
+  panel.setAttribute("role", "complementary");
+  panel.setAttribute("aria-label", "AutoDOM AI Chat");
   panel.innerHTML = `
     <!-- Header -->
-    <div class="autodom-chat-header">
+    <div class="autodom-chat-header" role="banner">
       <!-- Close × button — overflows outside the panel left edge -->
-      <button class="autodom-chat-close-btn" id="__autodom_close_btn" title="Close panel (Esc)">
-        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      <button class="autodom-chat-close-btn" id="__autodom_close_btn" title="Close panel (Esc)" aria-label="Close chat panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
       <div class="autodom-chat-header-left">
-        <div class="autodom-chat-header-logo">
+        <div class="autodom-chat-header-logo" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M8 10h8M8 14h5" stroke-linecap="round"/></svg>
         </div>
         <span class="autodom-chat-header-title">AutoDOM AI</span>
-        <span class="autodom-ai-badge">
-          <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <span class="autodom-ai-badge" aria-label="MCP AI mode">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
           MCP AI
         </span>
-        <span style="font-size:9px;font-weight:700;color:#c4b5fd;background:rgba(167,139,250,0.25);padding:1px 5px;border-radius:4px;letter-spacing:0.5px;text-transform:uppercase;">BETA</span>
-        <span class="autodom-chat-header-status disconnected" id="__autodom_status_badge">Offline</span>
+        <span class="autodom-chat-beta-badge" aria-label="Beta">BETA</span>
+        <span class="autodom-chat-header-status disconnected" id="__autodom_status_badge" role="status" aria-live="polite">Offline</span>
       </div>
       <div class="autodom-chat-header-actions">
-        <button class="autodom-chat-header-btn" id="__autodom_clear_btn" title="Clear conversation">
-          <svg viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        <button class="autodom-chat-header-btn" id="__autodom_clear_btn" title="Clear conversation" aria-label="Clear conversation">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         </button>
       </div>
     </div>
 
     <!-- Context Bar -->
-    <div class="autodom-chat-context">
-      <span class="autodom-chat-context-icon">
+    <div class="autodom-chat-context" role="status" aria-label="Page context">
+      <span class="autodom-chat-context-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l2 2"/></svg>
       </span>
       <span class="autodom-chat-context-text" id="__autodom_context_text">Loading page context...</span>
-      <span class="autodom-chat-context-mcp" id="__autodom_mcp_indicator">
-        <span class="dot"></span>
+      <span class="autodom-chat-context-mcp" id="__autodom_mcp_indicator" aria-label="MCP connection active">
+        <span class="dot" aria-hidden="true"></span>
         MCP Active
       </span>
     </div>
 
     <!-- Messages Area -->
-    <div class="autodom-chat-messages" id="__autodom_messages">
+    <div class="autodom-chat-messages" id="__autodom_messages" role="log" aria-label="Chat messages" aria-live="polite">
       <div class="autodom-chat-welcome">
-        <div class="autodom-chat-welcome-icon">
+        <div class="autodom-chat-welcome-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
           </svg>
         </div>
         <h3>AutoDOM AI Assistant</h3>
         <p>Ask me anything about this page — I'll use AI + MCP tools to help you interact with, analyze, and automate the browser.</p>
-        <div class="shortcut-hint">
+        <div class="shortcut-hint" aria-label="Keyboard shortcuts: Ctrl+Shift+K to toggle, Ctrl+Shift+L for inline mode">
           Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> to toggle &middot; <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> for inline mode
         </div>
       </div>
     </div>
 
     <!-- Quick Actions -->
-    <div class="autodom-chat-quick-actions" id="__autodom_quick_actions">
+    <div class="autodom-chat-quick-actions" id="__autodom_quick_actions" role="toolbar" aria-label="Quick actions">
       <button class="autodom-chat-quick-btn" data-action="dom_state">🔍 DOM State</button>
       <button class="autodom-chat-quick-btn" data-action="screenshot">📸 Screenshot</button>
       <button class="autodom-chat-quick-btn" data-action="page_info">ℹ\uFE0F Page Info</button>
@@ -1306,19 +1256,16 @@
         id="__autodom_chat_input"
         placeholder="Ask AI anything about this page..."
         rows="1"
+        aria-label="Chat message input"
       ></textarea>
-      <button class="autodom-chat-send-btn" id="__autodom_send_btn" title="Send (Enter)">
-        <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      <button class="autodom-chat-send-btn" id="__autodom_send_btn" title="Send (Enter)" aria-label="Send message">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
     </div>
 
     <!-- Footer -->
-    <div class="autodom-chat-footer">
-      <span class="ai-powered">
-        <svg viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-        AI-Powered
-      </span>
-      &middot; AutoDOM MCP
+    <div class="autodom-chat-footer" role="contentinfo">
+      AutoDOM
     </div>
   `;
   document.documentElement.appendChild(panel);
@@ -1330,16 +1277,19 @@
 
   const inlineOverlay = document.createElement("div");
   inlineOverlay.id = INLINE_OVERLAY_ID;
+  inlineOverlay.setAttribute("role", "dialog");
+  inlineOverlay.setAttribute("aria-label", "AutoDOM AI Quick Prompt");
+  inlineOverlay.setAttribute("aria-modal", "true");
   inlineOverlay.innerHTML = `
     <div class="autodom-inline-header">
-      <div class="logo">
+      <div class="logo" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M8 10h8M8 14h5" stroke-linecap="round"/></svg>
       </div>
       <span class="title">AutoDOM AI</span>
-      <span style="font-size:9px;font-weight:700;color:#c4b5fd;background:rgba(167,139,250,0.25);padding:1px 5px;border-radius:4px;letter-spacing:0.5px;">BETA</span>
-      <span class="mcp-status" id="__autodom_inline_status">
-        <span class="dot"></span>
-        MCP Connected
+      <span class="autodom-chat-beta-badge" aria-label="Beta">BETA</span>
+      <span class="mcp-status" id="__autodom_inline_status" role="status" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        Connected
       </span>
     </div>
     <div class="autodom-inline-input-row">
@@ -1349,23 +1299,24 @@
         id="__autodom_inline_input"
         placeholder="Ask AI to do something on this page..."
         autocomplete="off"
+        aria-label="Quick AI prompt"
       />
-      <button class="autodom-inline-send" id="__autodom_inline_send" title="Send">
-        <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      <button class="autodom-inline-send" id="__autodom_inline_send" title="Send" aria-label="Send prompt">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
     </div>
-    <div class="autodom-inline-hints" id="__autodom_inline_hints">
+    <div class="autodom-inline-hints" id="__autodom_inline_hints" role="toolbar" aria-label="Suggested prompts">
       <button class="autodom-inline-hint" data-text="What's on this page?">What's on this page?</button>
       <button class="autodom-inline-hint" data-text="Take a screenshot">Screenshot</button>
       <button class="autodom-inline-hint" data-text="Show interactive elements">DOM State</button>
       <button class="autodom-inline-hint" data-text="Summarize this page">Summarize</button>
       <button class="autodom-inline-hint" data-text="Check accessibility">A11y Check</button>
     </div>
-    <div class="autodom-inline-response" id="__autodom_inline_response">
+    <div class="autodom-inline-response" id="__autodom_inline_response" aria-live="polite">
       <div class="autodom-inline-response-content" id="__autodom_inline_response_content"></div>
     </div>
     <div class="autodom-inline-footer">
-      <kbd>Esc</kbd> to close &middot; <kbd>Enter</kbd> to send &middot; <kbd>Ctrl+Shift+L</kbd> to toggle
+      <kbd>Esc</kbd> close &middot; <kbd>Enter</kbd> send &middot; <kbd>Ctrl+Shift+L</kbd> toggle
     </div>
   `;
   document.documentElement.appendChild(inlineOverlay);
@@ -1396,10 +1347,9 @@
   function setMcpActive(active) {
     _log("setMcpActive:", active, "was:", isMcpActive);
     isMcpActive = active;
-    if (active) {
-      if (mcpIndicator) mcpIndicator.style.display = "inline-flex";
-    } else {
-      if (mcpIndicator) mcpIndicator.style.display = "none";
+    // MCP indicator in context bar is hidden via CSS — connection status
+    // is shown solely through the header status badge (setConnectionStatus).
+    if (!active) {
       // Auto-close panel when MCP disconnects
       if (isOpen) {
         addMessage("system", "MCP session ended. Chat panel will close.");
@@ -1748,9 +1698,11 @@
     const typing = document.createElement("div");
     typing.className = "autodom-chat-typing";
     typing.id = "__autodom_typing";
+    typing.setAttribute("role", "status");
+    typing.setAttribute("aria-label", "AI is thinking");
     typing.innerHTML = `
       <span class="ai-thinking-label">AI thinking</span>
-      <div class="dots"><span></span><span></span><span></span></div>
+      <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
     `;
     messagesContainer.appendChild(typing);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -2320,11 +2272,14 @@
 
         const shieldIcon = document.createElement("div");
         shieldIcon.className = "confirm-prompt-icon";
+        shieldIcon.setAttribute("aria-hidden", "true");
         shieldIcon.innerHTML = "\u{1F6E1}\uFE0F";
         msg.appendChild(shieldIcon);
 
         const title = document.createElement("div");
         title.className = "confirm-prompt-title";
+        title.setAttribute("role", "heading");
+        title.setAttribute("aria-level", "4");
         title.textContent = "Confirmation Required";
         msg.appendChild(title);
 
@@ -2348,6 +2303,10 @@
 
         const confirmBtn = document.createElement("button");
         confirmBtn.className = "confirm-prompt-btn confirm";
+        confirmBtn.setAttribute(
+          "aria-label",
+          "Confirm and execute action: " + command.tool,
+        );
         confirmBtn.textContent = "Confirm & Execute";
         confirmBtn.addEventListener("click", async () => {
           confirmBtn.disabled = true;
@@ -2390,6 +2349,7 @@
 
         const cancelBtn = document.createElement("button");
         cancelBtn.className = "confirm-prompt-btn cancel";
+        cancelBtn.setAttribute("aria-label", "Cancel action: " + command.tool);
         cancelBtn.textContent = "Cancel";
         cancelBtn.addEventListener("click", () => {
           confirmBtn.disabled = true;

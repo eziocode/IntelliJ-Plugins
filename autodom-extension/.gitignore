@@ -10,5 +10,8 @@ node_modules/
 # OS
 .DS_Store
 
+# Impeccable skills (local only)
+skills/
+
 # Zed editor config — tracked intentionally via .zed/
 # server/test-* files — kept for development reference
