@@ -345,6 +345,11 @@
       color: #4ade80;
       box-shadow: 0 0 8px rgba(34, 197, 94, 0.15);
     }
+    .autodom-chat-header-status.direct {
+      background: rgba(99, 102, 241, 0.12);
+      color: #818cf8;
+      box-shadow: 0 0 8px rgba(99, 102, 241, 0.15);
+    }
     .autodom-chat-header-status.disconnected {
       background: rgba(239, 68, 68, 0.1);
       color: #f87171;
@@ -1537,13 +1542,30 @@
   }
 
   // ─── Connection Status ─────────────────────────────────────
+  let _lastKnownProvider = "ide";
+
   function setConnectionStatus(connected, _unused) {
     _log("setConnectionStatus:", connected, "was:", isConnected);
     isConnected = connected;
     if (statusBadge) {
       if (connected) {
-        statusBadge.textContent = "AI Online";
-        statusBadge.className = "autodom-chat-header-status connected";
+        const isDirect =
+          _lastKnownProvider !== "ide" && _lastKnownProvider !== "mcp";
+        if (isDirect) {
+          const label =
+            _lastKnownProvider === "openai"
+              ? "GPT"
+              : _lastKnownProvider === "anthropic"
+                ? "Claude"
+                : _lastKnownProvider === "ollama"
+                  ? "Ollama"
+                  : "AI";
+          statusBadge.textContent = `${label} Online`;
+          statusBadge.className = "autodom-chat-header-status direct";
+        } else {
+          statusBadge.textContent = "AI Online";
+          statusBadge.className = "autodom-chat-header-status connected";
+        }
       } else {
         statusBadge.textContent = "Offline";
         statusBadge.className = "autodom-chat-header-status disconnected";
@@ -1625,10 +1647,26 @@
             resolve(false);
             return;
           }
-          const connected = !!(response && response.connected);
+          const bridgeConnected = !!(response && response.connected);
+          // A direct provider (OpenAI/Anthropic/Ollama with key) counts
+          // as "connected" even when the bridge server is offline.
+          const providerSrc = response?.provider?.source || "ide";
+          const hasDirectKey = !!(response?.provider?.apiKey || "").trim();
+          const directProviderReady =
+            providerSrc === "ollama" ||
+            ((providerSrc === "openai" || providerSrc === "anthropic") &&
+              hasDirectKey);
+          const connected = bridgeConnected || directProviderReady;
+          _lastKnownProvider = providerSrc;
           _log(
             "checkConnectionStatus: response:",
             JSON.stringify(response),
+            "bridgeConnected:",
+            bridgeConnected,
+            "directProviderReady:",
+            directProviderReady,
+            "provider:",
+            providerSrc,
             "connected:",
             connected,
           );
@@ -2071,18 +2109,26 @@
     );
 
     if (!isConnected) {
-      // Try local NLP-to-tool mapping as fallback even when disconnected
-      const localCommand = parseNaturalLanguage(text);
-      if (localCommand) {
-        await executeToolCommand(localCommand);
+      // Re-check — provider may have been configured since last poll
+      const recheckConnected = await checkConnectionStatus();
+      if (!recheckConnected) {
+        // Try local NLP-to-tool mapping as fallback even when disconnected
+        const localCommand = parseNaturalLanguage(text);
+        if (localCommand) {
+          await executeToolCommand(localCommand);
+          return;
+        }
+        addMessage(
+          "system",
+          "Not connected to any AI provider.\n\n" +
+            "To enable AI chat, go to the AutoDOM extension popup → Config tab and select a provider:\n" +
+            "• **Connect with GPT** — enter your OpenAI API key\n" +
+            "• **Connect with Claude** — enter your Anthropic API key\n" +
+            "• **Connect with Ollama** — free, runs locally (no key needed)\n\n" +
+            "You can still use slash commands like /dom, /screenshot, /click, or /help while offline.",
+        );
         return;
       }
-      addMessage(
-        "system",
-        "Not connected to MCP AI. Start the bridge server from your IDE and ensure the extension is connected.\n\n" +
-          "You can still use slash commands like /dom, /screenshot, /click, or /help while offline.",
-      );
-      return;
     }
 
     // Route to MCP AI agent for intelligent, context-aware response

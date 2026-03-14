@@ -20,6 +20,199 @@ let aiProviderSettings = {
   baseUrl: "",
 };
 
+// ─── Direct AI Provider Calls ────────────────────────────────
+// These functions let the service worker call OpenAI, Anthropic, or
+// Ollama APIs directly — no bridge server needed.  The service worker
+// has host_permissions: ["<all_urls>"] so cross-origin fetch works.
+
+function _buildSystemPrompt(context) {
+  let p =
+    "You are AutoDOM, a helpful browser AI assistant. " +
+    "You help users understand and interact with the current web page.\n\n";
+  if (context) {
+    if (context.title) p += `Page title: ${context.title}\n`;
+    if (context.url) p += `Page URL: ${context.url}\n`;
+    if (context.interactiveElements) {
+      const ie = context.interactiveElements;
+      p += `Interactive elements: ${ie.links || 0} links, ${ie.buttons || 0} buttons, ${ie.inputs || 0} inputs, ${ie.forms || 0} forms\n`;
+    }
+  }
+  p +=
+    "\nRespond clearly and concisely. If the user asks about page content, " +
+    "use the page context provided. For browser actions, suggest using " +
+    "slash commands like /dom, /click, /screenshot, /nav.";
+  return p;
+}
+
+function _buildMessages(text, context, conversationHistory) {
+  const msgs = [{ role: "system", content: _buildSystemPrompt(context) }];
+  // Add recent conversation history
+  if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+    conversationHistory.slice(-12).forEach((m) => {
+      if (m && m.role && m.content) {
+        msgs.push({
+          role: m.role === "assistant" || m.role === "system" ? m.role : "user",
+          content: String(m.content),
+        });
+      }
+    });
+  }
+  msgs.push({ role: "user", content: text });
+  return msgs;
+}
+
+async function _callDirectProvider(
+  providerType,
+  text,
+  context,
+  conversationHistory,
+) {
+  const normalized =
+    providerType === "gpt" || providerType === "chatgpt"
+      ? "openai"
+      : providerType === "claude"
+        ? "anthropic"
+        : providerType;
+
+  if (normalized === "openai") {
+    return _callOpenAI(text, context, conversationHistory);
+  }
+  if (normalized === "anthropic") {
+    return _callAnthropic(text, context, conversationHistory);
+  }
+  if (normalized === "ollama") {
+    return _callOllama(text, context, conversationHistory);
+  }
+  throw new Error(`Unknown direct provider: ${providerType}`);
+}
+
+async function _callOpenAI(text, context, conversationHistory) {
+  const apiKey = (aiProviderSettings.apiKey || "").trim();
+  if (!apiKey) throw new Error("No OpenAI API key configured");
+
+  const baseUrl = (
+    aiProviderSettings.baseUrl || "https://api.openai.com/v1"
+  ).replace(/\/+$/, "");
+  const model = aiProviderSettings.model || "gpt-4.1-mini";
+  const messages = _buildMessages(text, context, conversationHistory);
+
+  console.log(
+    "[AutoDOM SW] Calling OpenAI:",
+    baseUrl + "/chat/completions",
+    "model:",
+    model,
+  );
+
+  const resp = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ model, messages, max_tokens: 4096 }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(`OpenAI ${resp.status}: ${errText.substring(0, 300)}`);
+  }
+
+  const data = await resp.json();
+  const content = data?.choices?.[0]?.message?.content || "";
+  return {
+    response: content || "OpenAI returned an empty response.",
+    toolCalls: [{ tool: "_direct_provider", via: "openai", model }],
+  };
+}
+
+async function _callAnthropic(text, context, conversationHistory) {
+  const apiKey = (aiProviderSettings.apiKey || "").trim();
+  if (!apiKey) throw new Error("No Anthropic API key configured");
+
+  const model = aiProviderSettings.model || "claude-3-5-sonnet-latest";
+  const systemPrompt = _buildSystemPrompt(context);
+  const msgs = [];
+  if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+    conversationHistory.slice(-12).forEach((m) => {
+      if (m && m.role && m.content) {
+        msgs.push({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: String(m.content),
+        });
+      }
+    });
+  }
+  msgs.push({ role: "user", content: text });
+
+  console.log("[AutoDOM SW] Calling Anthropic, model:", model);
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: msgs,
+    }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(`Anthropic ${resp.status}: ${errText.substring(0, 300)}`);
+  }
+
+  const data = await resp.json();
+  const content = Array.isArray(data?.content)
+    ? data.content
+        .filter((p) => p?.type === "text" && p?.text)
+        .map((p) => p.text)
+        .join("\n")
+        .trim()
+    : "";
+  return {
+    response: content || "Anthropic returned an empty response.",
+    toolCalls: [{ tool: "_direct_provider", via: "anthropic", model }],
+  };
+}
+
+async function _callOllama(text, context, conversationHistory) {
+  const baseUrl = (
+    aiProviderSettings.baseUrl || "http://localhost:11434"
+  ).replace(/\/+$/, "");
+  const model = aiProviderSettings.model || "llama3.2";
+  const messages = _buildMessages(text, context, conversationHistory);
+
+  console.log(
+    "[AutoDOM SW] Calling Ollama:",
+    baseUrl + "/api/chat",
+    "model:",
+    model,
+  );
+
+  const resp = await fetch(`${baseUrl}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, stream: false }),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "");
+    throw new Error(`Ollama ${resp.status}: ${errText.substring(0, 300)}`);
+  }
+
+  const data = await resp.json();
+  const content = data?.message?.content || "";
+  return {
+    response: content || "Ollama returned an empty response.",
+    toolCalls: [{ tool: "_direct_provider", via: "ollama", model }],
+  };
+}
+
 // ─── Inactivity Timeout ─────────────────────────────────────
 // Auto-disconnect after 10 minutes of no tool calls.
 // Any tool call resets the timer. Keepalives do NOT reset it —
@@ -807,6 +1000,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "CONNECTIVITY_CHECK") {
+    // Quick check if direct provider is configured and reachable
+    const src = aiProviderSettings.source || "ide";
+    const isDirect =
+      (src === "openai" && !!(aiProviderSettings.apiKey || "").trim()) ||
+      (src === "anthropic" && !!(aiProviderSettings.apiKey || "").trim()) ||
+      src === "ollama";
+    sendResponse({
+      directProvider: isDirect,
+      provider: src,
+      bridgeConnected: isConnected,
+      hasApiKey: !!(aiProviderSettings.apiKey || "").trim(),
+    });
+    return false;
+  }
+
   if (message.type === "GET_STATUS") {
     sendResponse({
       connected: isConnected,
@@ -1019,85 +1228,100 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // ─── AI Chat Message Handler ─────────────────────────────
-  // Routes natural language messages from the in-browser chat panel
-  // through the MCP connection to the AI agent. The AI has full context
-  // of the page and can invoke tools + reply with intelligent answers.
+  // Routes natural language messages from the in-browser chat panel.
+  //
+  // For direct providers (OpenAI, Anthropic, Ollama) the service worker
+  // calls the provider API itself — NO bridge server needed.
+  //
+  // For IDE/MCP mode the request is forwarded through the WebSocket
+  // bridge so the IDE agent can handle it.
   if (message.type === "CHAT_AI_MESSAGE") {
     const { text, context, conversationHistory, provider } = message;
     console.log(
       "[AutoDOM SW] CHAT_AI_MESSAGE received, text:",
       (text || "").substring(0, 80),
     );
-    console.log(
-      "[AutoDOM SW] isConnected:",
-      isConnected,
-      "ws:",
-      ws ? "exists(state=" + ws.readyState + ")" : "null",
-    );
     touchToolActivity(); // Reset inactivity timer
 
-    // Resolve providerType from the incoming message OR the saved settings.
-    // The content script sends CHAT_AI_MESSAGE without a provider field,
-    // so provider is undefined here — we must fall back to aiProviderSettings.
+    // Resolve provider from incoming message OR saved settings.
     const providerType =
       (typeof provider === "string"
         ? provider
         : provider?.type || provider?.provider || provider?.source || null) ||
       aiProviderSettings.source ||
       "ide";
+
+    const hasDirectKey =
+      (providerType === "openai" || providerType === "gpt") &&
+      !!(aiProviderSettings.apiKey || "").trim();
+    const hasDirectAnthropic =
+      (providerType === "anthropic" || providerType === "claude") &&
+      !!(aiProviderSettings.apiKey || "").trim();
+    const isOllama = providerType === "ollama";
+    const isDirectProvider = hasDirectKey || hasDirectAnthropic || isOllama;
+
     console.log(
       "[AutoDOM SW] CHAT_AI_MESSAGE: providerType =",
       providerType,
-      "| incoming provider =",
-      JSON.stringify(provider),
-      "| aiProviderSettings.source =",
-      aiProviderSettings.source,
-      "| aiProviderSettings.apiKey length =",
-      (aiProviderSettings.apiKey || "").length,
+      "| isDirectProvider =",
+      isDirectProvider,
+      "| aiProviderSettings =",
+      JSON.stringify({
+        source: aiProviderSettings.source,
+        hasKey: !!(aiProviderSettings.apiKey || "").trim(),
+        keyLen: (aiProviderSettings.apiKey || "").length,
+        model: aiProviderSettings.model,
+        baseUrl: aiProviderSettings.baseUrl,
+      }),
     );
-    const requiresBridge =
-      providerType === "ide" ||
-      providerType === "mcp" ||
-      providerType === "openai" ||
-      providerType === "anthropic" ||
-      providerType === "gpt" ||
-      providerType === "claude" ||
-      providerType === "ollama";
 
-    if (requiresBridge && (!ws || ws.readyState !== WebSocket.OPEN)) {
+    // ─── Direct Provider Path (no bridge server needed) ──────
+    // Service worker calls OpenAI / Anthropic / Ollama API directly.
+    if (isDirectProvider) {
+      console.log("[AutoDOM SW] Using DIRECT provider path for:", providerType);
+
+      (async () => {
+        try {
+          const result = await _callDirectProvider(
+            providerType,
+            text,
+            context || {},
+            conversationHistory || [],
+          );
+          console.log(
+            "[AutoDOM SW] Direct provider responded, length:",
+            (result.response || "").length,
+          );
+          sendResponse({
+            type: "AI_CHAT_RESPONSE",
+            response: result.response,
+            toolCalls: result.toolCalls || [],
+            error: null,
+          });
+        } catch (err) {
+          console.error("[AutoDOM SW] Direct provider error:", err.message);
+          sendResponse({
+            type: "AI_CHAT_RESPONSE",
+            error: `${providerType} error: ${err.message}`,
+          });
+        }
+      })();
+
+      return true; // Keep message channel open for async sendResponse
+    }
+
+    // ─── IDE / MCP Path (requires bridge server) ─────────────
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       console.warn(
-        "[AutoDOM SW] CHAT_AI_MESSAGE: bridge unavailable for provider",
-        providerType,
+        "[AutoDOM SW] CHAT_AI_MESSAGE: bridge unavailable for IDE mode",
       );
       sendResponse({
         fallback: true,
         error:
-          providerType === "ide" || providerType === "mcp"
-            ? "Not connected to MCP AI. Local tool commands still work."
-            : `Provider "${providerType}" needs the AutoDOM bridge server to be connected. Local tool commands still work.`,
+          "Not connected to MCP AI. Local tool commands still work.\n\n" +
+          "Tip: Select a direct AI provider (GPT, Claude, or Ollama) in the extension settings to use AI chat without the bridge server.",
         type: "AI_CHAT_RESPONSE",
       });
-      if (shouldRunMcp) {
-        startAutoConnect(getCurrentPort());
-      }
-      return false;
-    }
-
-    if (
-      (providerType === "ide" || providerType === "mcp") &&
-      (!isConnected || !ws || ws.readyState !== WebSocket.OPEN)
-    ) {
-      console.warn(
-        "[AutoDOM SW] CHAT_AI_MESSAGE: IDE provider not connected, returning fallback",
-      );
-      // Return a fallback signal instead of a hard error so the chat panel
-      // can try local NLP-to-tool mapping (slash commands, click, navigate, etc.)
-      sendResponse({
-        fallback: true,
-        error: "Not connected to MCP AI. Local tool commands still work.",
-        type: "AI_CHAT_RESPONSE",
-      });
-      // Trigger a reconnect attempt if we should be running
       if (shouldRunMcp) {
         startAutoConnect(getCurrentPort());
       }
@@ -1106,61 +1330,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const aiRequestId = ++aiCallIdCounter;
 
-    // Send the AI chat request to the MCP bridge server
-    // The bridge server will route it to the selected AI provider
-    // Resolve provider to a plain string for the bridge server.
-    // The content-script may omit it; fall back to the saved setting.
-    const selectedProvider =
-      (typeof provider === "string"
-        ? provider
-        : provider?.type || provider?.provider || provider?.source || null) ||
-      aiProviderSettings.source ||
-      "ide";
-
-    console.log(
-      "[AutoDOM SW] CHAT_AI_MESSAGE: resolved provider =",
-      selectedProvider,
-      "| aiProviderSettings =",
-      JSON.stringify(aiProviderSettings),
-    );
-
     const aiMessage = {
       type: "AI_CHAT_REQUEST",
       id: aiRequestId,
       text: text,
       context: context || {},
       conversationHistory: conversationHistory || [],
-      provider: selectedProvider,
+      provider: providerType,
       providerConfig: {
         provider: aiProviderSettings.source || "ide",
-        openaiApiKey:
-          aiProviderSettings.source === "openai"
-            ? aiProviderSettings.apiKey
-            : "",
-        openaiModel:
-          aiProviderSettings.source === "openai"
-            ? aiProviderSettings.model || "gpt-4.1-mini"
-            : undefined,
-        openaiBaseUrl:
-          aiProviderSettings.source === "openai"
-            ? aiProviderSettings.baseUrl || "https://api.openai.com/v1"
-            : undefined,
-        anthropicApiKey:
-          aiProviderSettings.source === "anthropic"
-            ? aiProviderSettings.apiKey
-            : "",
-        anthropicModel:
-          aiProviderSettings.source === "anthropic"
-            ? aiProviderSettings.model || "claude-3-5-sonnet-latest"
-            : undefined,
-        ollamaBaseUrl:
-          aiProviderSettings.source === "ollama"
-            ? aiProviderSettings.baseUrl || "http://localhost:11434"
-            : undefined,
-        ollamaModel:
-          aiProviderSettings.source === "ollama"
-            ? aiProviderSettings.model || "llama3.2"
-            : undefined,
       },
     };
 
@@ -1171,13 +1349,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         pendingAiRequests.delete(aiRequestId);
         pending.resolve({
           type: "AI_CHAT_RESPONSE",
-          error:
-            providerType === "openai" ||
-            providerType === "anthropic" ||
-            providerType === "gpt" ||
-            providerType === "claude"
-              ? `Provider request timed out for "${providerType}".`
-              : "AI request timed out. The agent may be busy.",
+          error: "AI request timed out. The agent may be busy.",
         });
       }
     }, 60000); // 60s timeout for AI responses
@@ -1199,8 +1371,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log(
         "[AutoDOM SW] Sending AI_CHAT_REQUEST to bridge, id:",
         aiRequestId,
-        "provider:",
-        providerType,
       );
       ws.send(JSON.stringify(aiMessage));
     } catch (err) {
@@ -3098,6 +3268,18 @@ chrome.storage.local.get(
         baseUrl: aiProviderSettings.baseUrl,
       }),
     );
+
+    // If a direct provider is configured, log that bridge isn't needed for chat
+    if (
+      aiProviderSettings.source !== "ide" &&
+      aiProviderSettings.source !== "mcp"
+    ) {
+      console.log(
+        "[AutoDOM SW] Direct AI provider configured:",
+        aiProviderSettings.source,
+        "— chat will call provider API directly (no bridge needed)",
+      );
+    }
 
     chrome.storage.local.set({ mcpRunning: shouldRunMcp });
     if (shouldRunMcp) {
