@@ -1130,11 +1130,15 @@ function _processWsMessage(socket, message) {
 
     // Debug: log what provider info we received from the extension
     process.stderr.write(
-      `[AutoDOM] AI_CHAT_REQUEST: provider=${JSON.stringify(provider)}, ` +
-        `providerConfig.provider=${providerConfig?.provider || "(none)"}, ` +
-        `providerConfig.openaiApiKey=${providerConfig?.openaiApiKey ? "set(" + providerConfig.openaiApiKey.length + " chars)" : "(empty)"}, ` +
-        `providerConfig.anthropicApiKey=${providerConfig?.anthropicApiKey ? "set(" + providerConfig.anthropicApiKey.length + " chars)" : "(empty)"}, ` +
-        `providerConfig.ollamaBaseUrl=${providerConfig?.ollamaBaseUrl || "(none)"}\n`,
+      `[AutoDOM] ━━━ AI_CHAT_REQUEST ━━━\n` +
+        `[AutoDOM]   text: "${(text || "").substring(0, 60)}"\n` +
+        `[AutoDOM]   provider (raw): ${JSON.stringify(provider)}\n` +
+        `[AutoDOM]   providerConfig.provider: ${providerConfig?.provider || "(none)"}\n` +
+        `[AutoDOM]   providerConfig.openaiApiKey: ${providerConfig?.openaiApiKey ? "SET (" + providerConfig.openaiApiKey.length + " chars)" : "EMPTY"}\n` +
+        `[AutoDOM]   providerConfig.anthropicApiKey: ${providerConfig?.anthropicApiKey ? "SET (" + providerConfig.anthropicApiKey.length + " chars)" : "EMPTY"}\n` +
+        `[AutoDOM]   providerConfig.ollamaBaseUrl: ${providerConfig?.ollamaBaseUrl || "EMPTY"}\n` +
+        `[AutoDOM]   providerConfig.ollamaModel: ${providerConfig?.ollamaModel || "EMPTY"}\n` +
+        `[AutoDOM]   providerConfig.openaiBaseUrl: ${providerConfig?.openaiBaseUrl || "EMPTY"}\n`,
     );
 
     if (!extensionSocket || extensionSocket.readyState !== 1) {
@@ -1161,18 +1165,39 @@ function _processWsMessage(socket, message) {
         );
         const mergedProviderConfig = mergeProviderConfig(providerConfig);
 
+        const _hasCredentials = providerHasCredentials(
+          effectiveProvider,
+          mergedProviderConfig,
+        );
+        const _willRouteToProvider =
+          effectiveProvider !== "ide" && _hasCredentials;
+
         process.stderr.write(
-          `[AutoDOM] effectiveProvider="${effectiveProvider}", ` +
-            `hasCredentials=${providerHasCredentials(effectiveProvider, mergedProviderConfig)}, ` +
-            `mergedConfig.provider="${mergedProviderConfig.provider}", ` +
-            `mergedConfig.openaiApiKey=${mergedProviderConfig.openaiApiKey ? "set" : "empty"}, ` +
-            `mergedConfig.ollamaBaseUrl=${mergedProviderConfig.ollamaBaseUrl || "none"}\n`,
+          `[AutoDOM]   normalizeProviderSelection input: ${JSON.stringify(provider || providerConfig?.provider || directProviderConfig.provider)}\n` +
+            `[AutoDOM]   effectiveProvider: "${effectiveProvider}"\n` +
+            `[AutoDOM]   hasCredentials: ${_hasCredentials}\n` +
+            `[AutoDOM]   willRouteToDirectProvider: ${_willRouteToProvider}\n` +
+            `[AutoDOM]   mergedConfig.provider: "${mergedProviderConfig.provider}"\n` +
+            `[AutoDOM]   mergedConfig.openaiApiKey: ${mergedProviderConfig.openaiApiKey ? "SET (" + mergedProviderConfig.openaiApiKey.length + " chars)" : "EMPTY"}\n` +
+            `[AutoDOM]   mergedConfig.anthropicApiKey: ${mergedProviderConfig.anthropicApiKey ? "SET" : "EMPTY"}\n` +
+            `[AutoDOM]   mergedConfig.ollamaBaseUrl: ${mergedProviderConfig.ollamaBaseUrl || "EMPTY"}\n` +
+            `[AutoDOM]   mergedConfig.ollamaModel: ${mergedProviderConfig.ollamaModel || "EMPTY"}\n` +
+            `[AutoDOM]   directProviderConfig.provider: "${directProviderConfig.provider}"\n` +
+            `[AutoDOM] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`,
         );
 
-        if (
-          effectiveProvider !== "ide" &&
-          providerHasCredentials(effectiveProvider, mergedProviderConfig)
-        ) {
+        if (!_willRouteToProvider) {
+          process.stderr.write(
+            `[AutoDOM] ⚠ NOT routing to direct provider. Reason: ` +
+              `${effectiveProvider === "ide" ? "effectiveProvider is 'ide'" : `no credentials for '${effectiveProvider}'`}. ` +
+              `Falling through to heuristic/IDE routing.\n`,
+          );
+        }
+
+        if (effectiveProvider !== "ide" && _hasCredentials) {
+          process.stderr.write(
+            `[AutoDOM] ✓ Routing to direct provider: ${effectiveProvider}\n`,
+          );
           const providerResult = await routeDirectProviderChat({
             provider: effectiveProvider,
             text,
@@ -1181,6 +1206,9 @@ function _processWsMessage(socket, message) {
             providerConfig: mergedProviderConfig,
           });
 
+          process.stderr.write(
+            `[AutoDOM] ✓ Direct provider responded: ${(providerResult?.response || "").substring(0, 100)}...\n`,
+          );
           responseText = providerResult.response;
           if (Array.isArray(providerResult.toolCalls)) {
             toolCalls.push(...providerResult.toolCalls);

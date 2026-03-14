@@ -825,19 +825,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "SET_AI_PROVIDER") {
     const incomingProvider = message.provider || {};
+    console.log(
+      "[AutoDOM SW] SET_AI_PROVIDER received:",
+      JSON.stringify({
+        source: incomingProvider.source,
+        hasApiKey: !!(incomingProvider.apiKey || "").trim(),
+        apiKeyLen: (incomingProvider.apiKey || "").length,
+        model: incomingProvider.model,
+        baseUrl: incomingProvider.baseUrl,
+      }),
+    );
     aiProviderSettings = {
       source: incomingProvider.source || "ide",
       apiKey: incomingProvider.apiKey || "",
       model: incomingProvider.model || "",
       baseUrl: incomingProvider.baseUrl || "",
     };
+    console.log(
+      "[AutoDOM SW] aiProviderSettings updated:",
+      JSON.stringify({
+        source: aiProviderSettings.source,
+        hasApiKey: !!aiProviderSettings.apiKey,
+        apiKeyLen: aiProviderSettings.apiKey.length,
+        model: aiProviderSettings.model,
+        baseUrl: aiProviderSettings.baseUrl,
+      }),
+    );
 
-    chrome.storage.local.set({
-      aiProviderSource: aiProviderSettings.source,
-      aiProviderApiKey: aiProviderSettings.apiKey,
-      aiProviderModel: aiProviderSettings.model,
-      aiProviderBaseUrl: aiProviderSettings.baseUrl,
-    });
+    chrome.storage.local.set(
+      {
+        aiProviderSource: aiProviderSettings.source,
+        aiProviderApiKey: aiProviderSettings.apiKey,
+        aiProviderModel: aiProviderSettings.model,
+        aiProviderBaseUrl: aiProviderSettings.baseUrl,
+      },
+      () => {
+        console.log(
+          "[AutoDOM SW] Provider settings persisted to chrome.storage.local",
+        );
+      },
+    );
 
     sendResponse({
       success: true,
@@ -1018,6 +1045,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : provider?.type || provider?.provider || provider?.source || null) ||
       aiProviderSettings.source ||
       "ide";
+    console.log(
+      "[AutoDOM SW] CHAT_AI_MESSAGE: providerType =",
+      providerType,
+      "| incoming provider =",
+      JSON.stringify(provider),
+      "| aiProviderSettings.source =",
+      aiProviderSettings.source,
+      "| aiProviderSettings.apiKey length =",
+      (aiProviderSettings.apiKey || "").length,
+    );
     const requiresBridge =
       providerType === "ide" ||
       providerType === "mcp" ||
@@ -3050,6 +3087,17 @@ chrome.storage.local.get(
       model: result.aiProviderModel || "",
       baseUrl: result.aiProviderBaseUrl || "",
     };
+
+    console.log(
+      "[AutoDOM SW] Startup: loaded provider settings from storage:",
+      JSON.stringify({
+        source: aiProviderSettings.source,
+        hasApiKey: !!aiProviderSettings.apiKey,
+        apiKeyLen: aiProviderSettings.apiKey.length,
+        model: aiProviderSettings.model,
+        baseUrl: aiProviderSettings.baseUrl,
+      }),
+    );
 
     chrome.storage.local.set({ mcpRunning: shouldRunMcp });
     if (shouldRunMcp) {
