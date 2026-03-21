@@ -31,7 +31,7 @@ echo -e "${CYAN}═════════════════════�
 echo ""
 
 # ─── Step 1: Check Node.js ────────────────────────────────────
-echo -e "${BLUE}[1/5]${NC} Checking Node.js..."
+echo -e "${BLUE}[1/6]${NC} Checking Node.js..."
 
 if ! command -v node &> /dev/null; then
     echo -e "${RED}✗ Node.js not found.${NC}"
@@ -51,7 +51,7 @@ fi
 echo -e "${GREEN}✓${NC} Node.js $(node -v)"
 
 # ─── Step 2: Kill zombie processes ────────────────────────────
-echo -e "${BLUE}[2/5]${NC} Cleaning up stale processes..."
+echo -e "${BLUE}[2/6]${NC} Cleaning up stale processes..."
 
 ZOMBIES_KILLED=0
 
@@ -84,14 +84,44 @@ else
 fi
 
 # ─── Step 3: Install server dependencies ──────────────────────
-echo -e "${BLUE}[3/5]${NC} Installing server dependencies..."
+echo -e "${BLUE}[3/6]${NC} Installing server dependencies..."
 
 cd "$SERVER_DIR"
 npm install --silent 2>&1 | tail -1
 echo -e "${GREEN}✓${NC} Dependencies installed"
 
-# ─── Step 4: Verify server starts ─────────────────────────────
-echo -e "${BLUE}[4/5]${NC} Verifying server..."
+# ─── Step 4: Verify critical dependencies ─────────────────────
+echo -e "${BLUE}[4/6]${NC} Verifying critical dependencies..."
+
+MISSING_DEPS=0
+for dep in fastmcp ws zod; do
+    if [ ! -d "$SERVER_DIR/node_modules/$dep" ]; then
+        echo -e "${RED}  ✗ $dep not found in node_modules${NC}"
+        MISSING_DEPS=$((MISSING_DEPS + 1))
+    else
+        dep_ver=$(node -p "require('$SERVER_DIR/node_modules/$dep/package.json').version" 2>/dev/null || echo "unknown")
+        echo -e "${GREEN}  ✓ $dep@$dep_ver${NC}"
+    fi
+done
+
+if [ "$MISSING_DEPS" -gt 0 ]; then
+    echo -e "${YELLOW}  Retrying with clean install...${NC}"
+    rm -rf "$SERVER_DIR/node_modules"
+    npm install --silent 2>&1 | tail -1
+    # Re-check
+    for dep in fastmcp ws zod; do
+        if [ ! -d "$SERVER_DIR/node_modules/$dep" ]; then
+            echo -e "${RED}✗ $dep still missing after clean install. Check your network and try again.${NC}"
+            exit 1
+        fi
+    done
+    echo -e "${GREEN}✓${NC} All dependencies resolved after clean install"
+else
+    echo -e "${GREEN}✓${NC} All critical dependencies verified"
+fi
+
+# ─── Step 5: Verify server starts ─────────────────────────────
+echo -e "${BLUE}[5/6]${NC} Verifying server..."
 
 # Quick smoke test: start the server, check it prints the banner, kill it
 VERIFY_OUTPUT=$(echo '{}' | node "$SERVER_PATH" 2>&1 &
@@ -106,8 +136,8 @@ lsof -tiTCP:${DEFAULT_PORT} -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null ||
 
 echo -e "${GREEN}✓${NC} Server verified"
 
-# ─── Step 5: Configure IDEs ──────────────────────────────────
-echo -e "${BLUE}[5/5]${NC} Configuring IDEs..."
+# ─── Step 6: Configure IDEs ──────────────────────────────────
+echo -e "${BLUE}[6/6]${NC} Configuring IDEs..."
 
 MCP_CONFIG="{
   \"mcpServers\": {
