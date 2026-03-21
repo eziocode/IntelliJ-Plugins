@@ -14,7 +14,7 @@
                     <h1 class="app-title">AutoDOM</h1>
                     <p class="app-subtitle">Browser automation bridge</p>
                 </div>
-                <span class="version">v1.0</span>
+                <span class="version" id="appVersion">v1.2.0</span>
             </header>
 
             <nav class="tab-bar">
@@ -36,8 +36,8 @@
                                 >
                             </div>
                             <p class="status-detail" id="statusDetail">
-                                Auto-connecting — start the MCP server from your
-                                IDE
+                                Click Connect or enable auto-connect to start
+                                the bridge
                             </p>
                         </div>
                     </section>
@@ -58,11 +58,7 @@
                                 class="config-input"
                             />
                             <label class="checkbox-row" for="autoConnectToggle">
-                                <input
-                                    type="checkbox"
-                                    id="autoConnectToggle"
-                                    checked
-                                />
+                                <input type="checkbox" id="autoConnectToggle" />
                                 <span>Auto-connect</span>
                             </label>
                         </div>

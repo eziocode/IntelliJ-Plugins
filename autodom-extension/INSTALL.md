@@ -39,6 +39,9 @@ lsof -ti:9876 | xargs kill -9
 ```bash
 cd autodom-extension
 ./setup.sh
+
+# Add a second browser target on another port
+./setup.sh --name autodom-firefox --port 9877
 ```
 
 This will:
@@ -48,6 +51,8 @@ This will:
 - ✅ Auto-configure all detected IDEs (JetBrains, VS Code, Claude Desktop, Gemini CLI)
 - ✅ Enable autodom for both **GitHub Copilot** and **JetBrains AI Assistant**
 - ✅ Print instructions for loading the browser extension
+
+For multiple browsers at the same time, run `setup.sh` once per browser with a unique MCP server name and port.
 
 After the script finishes:
 

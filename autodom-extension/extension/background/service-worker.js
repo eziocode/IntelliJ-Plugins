@@ -691,6 +691,7 @@ function connectWebSocket(port) {
 
     ws.onopen = () => {
       isConnected = true;
+      _startupRestoreOnly = false;
       // Send KEEPALIVE immediately so the bridge recognises us as the
       // Chrome extension right away, instead of waiting 20 s for the
       // first setInterval tick.
@@ -876,6 +877,18 @@ function connectWebSocket(port) {
         "[AutoDOM] WebSocket error:",
         err?.message || err?.type || "connection refused",
       );
+      if (_startupRestoreOnly) {
+        _startupRestoreOnly = false;
+        shouldRunMcp = false;
+        stopAutoConnect();
+        chrome.storage.local.set({ mcpRunning: false });
+        broadcastStatus(
+          false,
+          "Bridge not running. Click Connect or enable auto-connect.",
+          "info",
+        );
+        return;
+      }
       // Only broadcast to popup if this isn't a routine auto-connect failure
       if (_autoConnectAttempt <= 1) {
         broadcastStatus(
@@ -959,6 +972,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const port = message.port || getCurrentPort();
     wsPort = port;
     shouldRunMcp = true;
+    _startupRestoreOnly = false;
     _sessionTimedOut = false; // Clear timeout flag on fresh start
     chrome.storage.local.set({ mcpPort: port, mcpRunning: true });
     startAutoConnect(port);
@@ -989,10 +1003,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({ autoConnect });
     if (autoConnect && !shouldRunMcp) {
       shouldRunMcp = true;
+      _startupRestoreOnly = false;
       chrome.storage.local.set({ mcpRunning: true });
       startAutoConnect(getCurrentPort());
     } else if (!autoConnect && !isConnected) {
       shouldRunMcp = false;
+      _startupRestoreOnly = false;
       stopAutoConnect();
       chrome.storage.local.set({ mcpRunning: false });
     }
@@ -3191,12 +3207,13 @@ chrome.commands.onCommand.addListener(async (command) => {
 });
 
 // ─── Auto-connect on service worker startup ──────────────────
-// The extension auto-connects to the MCP server whenever it's available.
-// No manual steps needed — just load the extension and configure the IDE.
+// The extension reconnects automatically when the user opts in or when a
+// current MCP session is being restored after a worker restart.
 
 let autoConnectInterval = null;
 let autoConnectPort = null;
 let _autoConnectAttempt = 0;
+let _startupRestoreOnly = false;
 
 function startAutoConnect(port) {
   const nextPort = port || getCurrentPort();
@@ -3246,10 +3263,10 @@ chrome.storage.local.get(
   ],
   (result) => {
     const port = result.mcpPort || 9876;
-    shouldRunMcp =
-      typeof result.mcpRunning === "boolean"
-        ? result.mcpRunning
-        : result.autoConnect !== false;
+    const autoConnect = result.autoConnect === true;
+    const restoreRunning = result.mcpRunning === true;
+    shouldRunMcp = autoConnect || restoreRunning;
+    _startupRestoreOnly = !autoConnect && restoreRunning;
 
     aiProviderSettings = {
       source: result.aiProviderSource || "ide",
@@ -3296,13 +3313,20 @@ chrome.runtime.onInstalled.addListener(() => {
     ["mcpPort", "autoConnect", "mcpRunning"],
     (result) => {
       const port = result.mcpPort || 9876;
+      const autoConnect =
+        typeof result.autoConnect === "boolean" ? result.autoConnect : false;
       const initialRunning =
         typeof result.mcpRunning === "boolean"
           ? result.mcpRunning
-          : result.autoConnect !== false;
+          : autoConnect;
 
       shouldRunMcp = initialRunning;
-      chrome.storage.local.set({ mcpPort: port, mcpRunning: initialRunning });
+      _startupRestoreOnly = false;
+      chrome.storage.local.set({
+        mcpPort: port,
+        autoConnect,
+        mcpRunning: initialRunning,
+      });
       if (initialRunning) {
         startAutoConnect(port);
       } else {

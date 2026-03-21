@@ -216,6 +216,9 @@ Optionally, the SSE transport uses a second port (e.g. `--sse-port 9877`) for br
 ```bash
 cd autodom-extension
 ./setup.sh
+
+# Add a second browser target on a different port
+./setup.sh --name autodom-firefox --port 9877
 ```
 
 The script will:
@@ -232,8 +235,10 @@ Then:
    - **Firefox:** open `about:debugging`, choose **This Firefox**, click **Load Temporary Add-on**, and select `extension/manifest.firefox.json`
 2. Pin AutoDOM to the toolbar
 3. Restart your IDE
-4. Open the AutoDOM popup → click **Connect** (or it auto-connects)
+4. Open the AutoDOM popup, set the matching port, then click **Connect** or enable **Auto-connect**
 5. Use your AI agent — core automation tools are available in both Chromium and Firefox
+
+Use a unique server name and port for each browser you want to run at the same time. Example: Chrome on `autodom` / `9876`, Firefox on `autodom-firefox` / `9877`.
 6. Press `Ctrl+Shift+K` (or `Cmd+Shift+K` on macOS) on any page to open the in-browser chat panel
 
 ---

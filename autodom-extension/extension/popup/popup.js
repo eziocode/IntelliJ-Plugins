@@ -1,13 +1,14 @@
 /**
  * AutoDOM — Popup Controller
  * Manages the popup UI — Status tab + Config tab.
- * Auto-connects to the MCP server, no manual start needed.
+ * Lets the user connect to the MCP server and opt into auto-connect.
  */
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 const DOM = {
+  appVersion: $("#appVersion"),
   actionBtn: $("#actionBtn"),
   actionBtnText: $("#actionBtnText"),
   portInput: $("#portInput"),
@@ -62,6 +63,10 @@ function sendRuntimeMessage(message) {
 
 // ─── Init ────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", async () => {
+  if (DOM.appVersion) {
+    DOM.appVersion.textContent = `v${chrome.runtime.getManifest().version}`;
+  }
+
   // Load saved port, server path, auto-connect preference, and provider settings
   const stored = await chrome.storage.local.get([
     "mcpPort",
@@ -74,7 +79,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   ]);
   const port = stored.mcpPort || 9876;
   const serverPath = stored.serverPath || null;
-  const autoConnect = stored.autoConnect !== false; // Default true
+  const autoConnect = stored.autoConnect === true;
 
   providerSettings = {
     source: stored.aiProviderSource || "ide",
@@ -131,7 +136,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else if (response.running) {
       addLog("MCP is starting. Auto-retry is active.", "info");
     } else {
-      addLog("Auto-connecting... waiting for MCP server", "info");
+      addLog("Disconnected. Click Connect or enable auto-connect.", "info");
     }
   } else if (response?.error) {
     addLog(`Background worker unavailable: ${response.error}`, "error");
@@ -568,7 +573,7 @@ function updateUI() {
     DOM.statusCard.className = "status-card";
     DOM.statusLabel.textContent = "Waiting";
     DOM.statusDetail.textContent =
-      "Auto-connecting — start the MCP server from your IDE";
+      "Click Connect or enable auto-connect to start the bridge";
     DOM.portInput.disabled = false;
   }
 
