@@ -120,6 +120,23 @@ body {
     padding-bottom: 2px;
 }
 
+.brand-block {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.brand-mark {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    box-shadow:
+        0 8px 18px oklch(24% 0.03 70 / 18%),
+        inset 0 0 0 1px oklch(100% 0 0 / 10%);
+}
+
 .app-title {
     margin: 0;
     font-size: 16px;
