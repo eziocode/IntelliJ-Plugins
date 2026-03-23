@@ -18,6 +18,7 @@ const DOM = {
   tabTitle: $("#tabTitle"),
   tabUrl: $("#tabUrl"),
   logContainer: $("#logContainer"),
+  logFilter: $("#logFilter"),
   logClear: $("#logClear"),
   connectBtn: $("#connectBtn"),
   autoConnectToggle: $("#autoConnectToggle"),
@@ -39,12 +40,15 @@ const DOM = {
 let isRunning = false;
 let isConnected = false;
 const ACTIVITY_LOG_KEY = "autodomActivityLogs";
+const ACTIVITY_FILTER_KEY = "autodomActivityLogFilter";
 const activityStorage = chrome.storage.session || chrome.storage.local;
 let providerSettings = {
   source: "ide",
   apiKey: "",
   model: "",
 };
+let activityLogs = [];
+let activityFilter = "all";
 
 function sendRuntimeMessage(message) {
   return new Promise((resolve) => {
@@ -99,7 +103,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   updateProviderUI();
 
   const storedActivity = await activityStorage.get([ACTIVITY_LOG_KEY]);
-  renderActivityLogs(storedActivity[ACTIVITY_LOG_KEY] || []);
+  activityLogs = Array.isArray(storedActivity[ACTIVITY_LOG_KEY])
+    ? storedActivity[ACTIVITY_LOG_KEY]
+    : [];
+
+  const storedUiState = await chrome.storage.local.get([ACTIVITY_FILTER_KEY]);
+  activityFilter = storedUiState[ACTIVITY_FILTER_KEY] || "all";
+  if (DOM.logFilter) DOM.logFilter.value = activityFilter;
+  renderActivityLogs(activityLogs);
 
   // Load guardrails settings
   const guardrails = await chrome.storage.local.get([
@@ -186,7 +197,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     if (changes[ACTIVITY_LOG_KEY]) {
-      renderActivityLogs(changes[ACTIVITY_LOG_KEY].newValue || []);
+      activityLogs = Array.isArray(changes[ACTIVITY_LOG_KEY].newValue)
+        ? changes[ACTIVITY_LOG_KEY].newValue
+        : [];
+      renderActivityLogs(activityLogs);
+    }
+
+    if (changes[ACTIVITY_FILTER_KEY]) {
+      activityFilter = changes[ACTIVITY_FILTER_KEY].newValue || "all";
+      if (DOM.logFilter) DOM.logFilter.value = activityFilter;
+      renderActivityLogs(activityLogs);
     }
 
     if (
@@ -233,6 +253,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (DOM.saveProviderBtn) {
     DOM.saveProviderBtn.addEventListener("click", saveProviderSettings);
+  }
+
+  if (DOM.logFilter) {
+    DOM.logFilter.addEventListener("change", async () => {
+      activityFilter = DOM.logFilter.value || "all";
+      await chrome.storage.local.set({
+        [ACTIVITY_FILTER_KEY]: activityFilter,
+      });
+      renderActivityLogs(activityLogs);
+    });
   }
 
   if (DOM.providerEnabledToggle) {
@@ -472,6 +502,7 @@ DOM.connectBtn.addEventListener("click", async () => {
 
 DOM.logClear.addEventListener("click", () => {
   activityStorage.set({ [ACTIVITY_LOG_KEY]: [] }).catch(() => {});
+  activityLogs = [];
   renderActivityLogs([]);
 });
 
@@ -745,11 +776,17 @@ function appendActivityLog(level, text, source = "popup") {
 
 function renderActivityLogs(entries) {
   if (!DOM.logContainer) return;
-  const logs = Array.isArray(entries) ? entries : [];
+  const logs = filterActivityLogs(
+    Array.isArray(entries) ? entries : [],
+    activityFilter,
+  );
   DOM.logContainer.innerHTML = "";
   if (logs.length === 0) {
-    DOM.logContainer.innerHTML =
-      '<div class="log-entry log-info">No activity yet.</div>';
+    const emptyMessage =
+      activityFilter === "all"
+        ? "No activity yet."
+        : "No matching activity yet.";
+    DOM.logContainer.innerHTML = `<div class="log-entry log-info">${emptyMessage}</div>`;
     return;
   }
   for (const item of logs) {
@@ -768,4 +805,12 @@ function renderActivityLogs(entries) {
     DOM.logContainer.appendChild(entry);
   }
   DOM.logContainer.scrollTop = DOM.logContainer.scrollHeight;
+}
+
+function filterActivityLogs(entries, filter) {
+  if (!Array.isArray(entries) || filter === "all") {
+    return Array.isArray(entries) ? entries : [];
+  }
+
+  return entries.filter((item) => (item?.level || "info") === filter);
 }
