@@ -744,6 +744,7 @@ function connectWebSocket(port) {
     ws.onopen = () => {
       isConnected = true;
       _startupRestoreOnly = false;
+      stopAutoConnect();
       // Send KEEPALIVE immediately so the bridge recognises us as the
       // Chrome extension right away, instead of waiting 20 s for the
       // first setInterval tick.
@@ -898,14 +899,23 @@ function connectWebSocket(port) {
         broadcastMcpStopToAllTabs();
         chrome.storage.local.set({ mcpRunning: false });
       } else {
-        shouldRunMcp = false;
-        stopAutoConnect();
-        chrome.storage.local.set({ mcpRunning: false });
-        broadcastStatus(
-          false,
-          "Disconnected from MCP bridge server. Click Connect to retry.",
-          "warn",
-        );
+        if (shouldRunMcp) {
+          chrome.storage.local.set({ mcpRunning: true });
+          broadcastStatus(
+            false,
+            "Disconnected from MCP bridge server. Auto-reconnect is retrying.",
+            "warn",
+          );
+          startAutoConnect(getCurrentPort());
+        } else {
+          stopAutoConnect();
+          chrome.storage.local.set({ mcpRunning: false });
+          broadcastStatus(
+            false,
+            "Disconnected from MCP bridge server. Click Connect to retry.",
+            "warn",
+          );
+        }
         broadcastToAllTabs([
           { type: "HIDE_SESSION_BORDER" },
           { type: "HIDE_CHAT_PANEL" },
@@ -921,12 +931,9 @@ function connectWebSocket(port) {
       );
       if (_startupRestoreOnly) {
         _startupRestoreOnly = false;
-        shouldRunMcp = false;
-        stopAutoConnect();
-        chrome.storage.local.set({ mcpRunning: false });
         broadcastStatus(
           false,
-          "Bridge not running. Click Connect or enable auto-connect.",
+          "Bridge not reachable yet. Auto-connect will keep retrying.",
           "info",
         );
       }

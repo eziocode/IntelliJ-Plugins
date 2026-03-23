@@ -1592,6 +1592,11 @@ function _processWsMessage(socket, message) {
         );
       } catch (_) {}
     }
+    if (message.type === "KEEPALIVE" && socket.readyState === 1) {
+      try {
+        socket.send(JSON.stringify({ type: "PONG" }));
+      } catch (_) {}
+    }
     return;
   }
 }
