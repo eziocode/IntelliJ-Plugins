@@ -12,6 +12,8 @@ let isConnected = false;
 let keepAliveInterval = null;
 let shouldRunMcp = false;
 let autoConnectEnabled = false;
+let lastConnectedPort = 9876;
+let autoConnectFallbackTried = false;
 let _sessionTimedOut = false; // Set when server or extension inactivity timeout fires
 const ACTIVITY_LOG_KEY = "autodomActivityLogs";
 const ACTIVITY_LOG_LIMIT = 250;
@@ -752,6 +754,12 @@ function connectWebSocket(port) {
     ws.onopen = () => {
       isConnected = true;
       _startupRestoreOnly = false;
+      autoConnectFallbackTried = false;
+      lastConnectedPort = getCurrentPort();
+      chrome.storage.local.set({
+        serverPort: lastConnectedPort,
+        mcpLastConnectedPort: lastConnectedPort,
+      });
       stopAutoConnect();
       // Send KEEPALIVE immediately so the bridge recognises us as the
       // Chrome extension right away, instead of waiting 20 s for the
@@ -881,9 +889,15 @@ function connectWebSocket(port) {
         }
         if (message.type === "SERVER_INFO") {
           // Store the server's actual filesystem path for the Config tab
+          if (message.port) {
+            lastConnectedPort = Number(message.port) || lastConnectedPort;
+            chrome.storage.local.set({
+              serverPort: lastConnectedPort,
+              mcpLastConnectedPort: lastConnectedPort,
+            });
+          }
           chrome.storage.local.set({
             serverPath: message.serverPath,
-            serverPort: message.port,
           });
           _debugLog("[AutoDOM] Server path:", message.serverPath);
         }
@@ -923,14 +937,38 @@ function connectWebSocket(port) {
         broadcastMcpStopToAllTabs();
         chrome.storage.local.set({ mcpRunning: false });
       } else {
-        if (shouldRunMcp) {
+        const currentPort = getCurrentPort();
+        const fallbackPort =
+          Number.isFinite(lastConnectedPort) && lastConnectedPort > 0
+            ? lastConnectedPort
+            : null;
+
+        if (
+          autoConnectEnabled &&
+          !isConnected &&
+          fallbackPort &&
+          fallbackPort !== currentPort &&
+          !autoConnectFallbackTried
+        ) {
+          autoConnectFallbackTried = true;
+          wsPort = fallbackPort;
+          chrome.storage.local.set({
+            mcpRunning: true,
+          });
+          broadcastStatus(
+            false,
+            `Disconnected from ws://127.0.0.1:${currentPort}. Falling back to last working port ${fallbackPort}.`,
+            "warn",
+          );
+          startAutoConnect(fallbackPort);
+        } else if (shouldRunMcp) {
           chrome.storage.local.set({ mcpRunning: true });
           broadcastStatus(
             false,
             "Disconnected from MCP bridge server. Auto-reconnect is retrying.",
             "warn",
           );
-          startAutoConnect(getCurrentPort());
+          startAutoConnect(currentPort);
         } else {
           stopAutoConnect();
           chrome.storage.local.set({ mcpRunning: false });
@@ -960,6 +998,26 @@ function connectWebSocket(port) {
           "Bridge not reachable yet. Auto-connect will keep retrying.",
           "info",
         );
+      } else if (autoConnectEnabled && !isConnected) {
+        const currentPort = getCurrentPort();
+        if (
+          Number.isFinite(lastConnectedPort) &&
+          lastConnectedPort > 0 &&
+          lastConnectedPort !== currentPort &&
+          !autoConnectFallbackTried
+        ) {
+          autoConnectFallbackTried = true;
+          wsPort = lastConnectedPort;
+          chrome.storage.local.set({
+            mcpRunning: true,
+          });
+          broadcastStatus(
+            false,
+            `Connection refused on port ${currentPort}. Trying last working port ${lastConnectedPort}.`,
+            "warn",
+          );
+          startAutoConnect(lastConnectedPort);
+        }
       }
     };
   } catch (err) {
@@ -1067,6 +1125,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "STOP_MCP") {
     shouldRunMcp = false;
     autoConnectEnabled = false;
+    autoConnectFallbackTried = false;
     stopAutoConnect();
     chrome.storage.local.set({ autoConnect: false, mcpRunning: false });
     disconnectWebSocket();
@@ -1077,6 +1136,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SET_AUTO_CONNECT") {
     const autoConnect = !!message.value;
     autoConnectEnabled = autoConnect;
+    autoConnectFallbackTried = false;
     chrome.storage.local.set({ autoConnect });
     if (autoConnect) {
       shouldRunMcp = true;
@@ -3360,6 +3420,9 @@ chrome.storage.local.get(
     const port = result.mcpPort || 9876;
     const autoConnect = result.autoConnect === true;
     autoConnectEnabled = autoConnect;
+    autoConnectFallbackTried = false;
+    lastConnectedPort =
+      Number(result.mcpLastConnectedPort || result.serverPort || port) || port;
     shouldRunMcp = autoConnect;
     _startupRestoreOnly = autoConnect;
 
@@ -3413,7 +3476,11 @@ chrome.runtime.onInstalled.addListener(() => {
       const initialRunning = autoConnect;
 
       shouldRunMcp = initialRunning;
+      autoConnectFallbackTried = false;
       _startupRestoreOnly = false;
+      lastConnectedPort =
+        Number(result.mcpLastConnectedPort || result.serverPort || port) ||
+        port;
       chrome.storage.local.set({
         mcpPort: port,
         autoConnect,
