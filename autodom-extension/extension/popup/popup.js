@@ -38,6 +38,8 @@ const DOM = {
 
 let isRunning = false;
 let isConnected = false;
+const ACTIVITY_LOG_KEY = "autodomActivityLogs";
+const activityStorage = chrome.storage.session || chrome.storage.local;
 let providerSettings = {
   source: "ide",
   apiKey: "",
@@ -96,6 +98,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (DOM.providerBaseUrl) DOM.providerBaseUrl.value = providerSettings.baseUrl;
   updateProviderUI();
 
+  const storedActivity = await activityStorage.get([ACTIVITY_LOG_KEY]);
+  renderActivityLogs(storedActivity[ACTIVITY_LOG_KEY] || []);
+
   // Load guardrails settings
   const guardrails = await chrome.storage.local.get([
     "rateLimitConfig",
@@ -134,7 +139,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (response.connected) {
       addLog("Connected to MCP bridge server", "success");
     } else if (response.running) {
-      addLog("MCP is starting. Auto-retry is active.", "info");
+      addLog("MCP connection attempt in progress.", "info");
     } else {
       addLog("Disconnected. Click Connect or enable auto-connect.", "info");
     }
@@ -178,6 +183,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         parseInt(DOM.portInput.value, 10) || 9876,
         changes.serverPath.newValue,
       );
+    }
+
+    if (changes[ACTIVITY_LOG_KEY]) {
+      renderActivityLogs(changes[ACTIVITY_LOG_KEY].newValue || []);
     }
 
     if (
@@ -275,9 +284,7 @@ function initTabs() {
             textArea.select();
             success = document.execCommand("copy");
             document.body.removeChild(textArea);
-          } catch (fallbackErr) {
-            console.error("Clipboard copy failed:", fallbackErr);
-          }
+          } catch (_) {}
         }
 
         if (success) {
@@ -446,7 +453,7 @@ DOM.connectBtn.addEventListener("click", async () => {
       updateUI();
       addLog("MCP connection established!", "success");
     } else {
-      addLog("MCP start requested. Auto-retry active.", "info");
+      addLog("MCP start requested.", "info");
     }
   } else {
     addLog("Stopping MCP...", "info");
@@ -464,9 +471,8 @@ DOM.connectBtn.addEventListener("click", async () => {
 });
 
 DOM.logClear.addEventListener("click", () => {
-  if (!DOM.logContainer) return;
-  DOM.logContainer.innerHTML = "";
-  addLog("Log cleared.", "info");
+  activityStorage.set({ [ACTIVITY_LOG_KEY]: [] }).catch(() => {});
+  renderActivityLogs([]);
 });
 
 // ─── Guardrails Event Listeners ──────────────────────────────
@@ -565,7 +571,7 @@ function updateUI() {
     DOM.statusLabel.textContent = isConnected ? "Connected" : "Connecting";
     DOM.statusDetail.textContent = isConnected
       ? `Bridge server on ws://127.0.0.1:${DOM.portInput.value}`
-      : `Trying ws://127.0.0.1:${DOM.portInput.value} with auto-retry`;
+      : `Trying ws://127.0.0.1:${DOM.portInput.value}`;
     DOM.portInput.disabled = true;
   } else {
     DOM.connectBtn.style.color = "";
@@ -709,26 +715,57 @@ refreshTabsBtn.addEventListener("click", () => {
 });
 
 function addLog(text, level = "info") {
-  if (!DOM.logContainer) {
-    console.warn("[AutoDOM] Log container not found:", text);
-    return;
-  }
-  const entry = document.createElement("div");
-  entry.className = `log-entry log-${level}`;
-  const now = new Date();
-  const time = now.toLocaleTimeString("en-US", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  entry.innerHTML = `<span class="log-time">${time}</span>${escapeHtml(text)}`;
-  DOM.logContainer.appendChild(entry);
-  DOM.logContainer.scrollTop = DOM.logContainer.scrollHeight;
+  appendActivityLog(level, text, "popup");
 }
 
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+function appendActivityLog(level, text, source = "popup") {
+  const entry = {
+    ts: Date.now(),
+    level: level || "info",
+    source,
+    text: String(text || ""),
+  };
+  activityStorage.get([ACTIVITY_LOG_KEY], (result) => {
+    const logs = Array.isArray(result?.[ACTIVITY_LOG_KEY])
+      ? result[ACTIVITY_LOG_KEY]
+      : [];
+    logs.push(entry);
+    if (logs.length > 250) {
+      logs.splice(0, logs.length - 250);
+    }
+    activityStorage.set({ [ACTIVITY_LOG_KEY]: logs }).catch(() => {});
+  });
+}
+
+function renderActivityLogs(entries) {
+  if (!DOM.logContainer) return;
+  const logs = Array.isArray(entries) ? entries : [];
+  DOM.logContainer.innerHTML = "";
+  if (logs.length === 0) {
+    DOM.logContainer.innerHTML =
+      '<div class="log-entry log-info">No activity yet.</div>';
+    return;
+  }
+  for (const item of logs) {
+    const entry = document.createElement("div");
+    entry.className = `log-entry log-${item.level || "info"}`;
+    const now = new Date(item.ts || Date.now());
+    const time = now.toLocaleTimeString("en-US", {
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    const source =
+      item.source && item.source !== "popup" ? `[${item.source}] ` : "";
+    entry.innerHTML = `<span class="log-time">${time}</span>${escapeHtml(source + (item.text || ""))}`;
+    DOM.logContainer.appendChild(entry);
+  }
+  DOM.logContainer.scrollTop = DOM.logContainer.scrollHeight;
 }

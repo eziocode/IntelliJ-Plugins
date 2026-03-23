@@ -36,3 +36,8 @@ AI Learning Tools.xml
 learn-from-ai-chats.py
 .ai-learn-state.json
 autodom-extension.zip
+autodom-extension/GETTING-STARTED.md
+autodom-extension/pack.sh
+autodom-extension/skills/frontend-design/reference/motion-design.md
+autodom-extension/skills/adapt/SKILL.md
+autodom-extension/.gitignore

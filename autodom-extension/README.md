@@ -13,7 +13,7 @@ Firefox is also supported with a separate Gecko-compatible manifest for local de
 - 💬 **In-Browser Chat** — A built-in AI chat sidebar (`Ctrl/Cmd+Shift+K`) lets you interact with MCP tools directly from any web page — no IDE required.
 - ⏱️ **Inactivity Auto-Shutdown** — Sessions auto-close after 10 minutes of no tool activity to free resources. Warnings appear at 8 minutes.
 - 🌐 **SSE Transport** — Optional Server-Sent Events transport (`--sse-port`) enables browser-based and remote MCP agent connections alongside stdio.
-- ⚡ **Lightweight & Efficient** — Exponential backoff on reconnects, History API–based SPA detection (replaces DOM-wide MutationObserver), ring-buffer tool logs, and cached keepalive messages minimize CPU and memory footprint.
+- ⚡ **Lightweight & Efficient** — Exponential backoff on auto-connect attempts, History API–based SPA detection (replaces DOM-wide MutationObserver), ring-buffer tool logs, and cached keepalive messages minimize CPU and memory footprint.
 
 ---
 
@@ -757,7 +757,7 @@ sudo apt-get install -y nodejs
 ### Extension settings
 
 - **Port** — configurable in the popup (must match server `--port`)
-- **Auto-connect** — the extension automatically reconnects when the service worker restarts
+- **Auto-connect** — when enabled, the extension attempts to reconnect on service worker startup
 - **Chat panel** — Toggle with `Ctrl/Cmd+Shift+K` on any page, or click the floating button
 - **Inactivity timeout** — Extension disconnects after 10 minutes of no tool calls (matches server)
 
@@ -775,7 +775,7 @@ AutoDOM is designed to be lightweight and efficient. The following optimizations
 | Inactivity check | 60s | Checks for session idle timeout (10 min default) |
 | WebSocket ping | 15s | Keepalive for Chrome extension connection |
 | Message batching | 5ms | Micro-batches outbound WebSocket frames |
-| Auto-connect backoff | 3s → 30s | Exponential backoff when server is unavailable |
+| Auto-connect backoff | 3s → 30s | Exponential backoff for startup auto-connect attempts |
 
 ### Environment Variables for Tuning
 
@@ -811,7 +811,7 @@ AutoDOM is designed to be lightweight and efficient. The following optimizations
 
 - **Inactivity auto-shutdown** — Sessions close after 10 minutes of idle. This is intentional — use any tool to keep the session alive, or set `AUTODOM_INACTIVITY_TIMEOUT=0` to disable.
 
-- **Service worker idle timeout** — Chrome suspends MV3 service workers after ~30 seconds of inactivity. The keepalive mechanism (sends a ping every 20s) prevents this, but if Chrome is under heavy memory pressure, the service worker may still be evicted and need to reconnect.
+- **Service worker idle timeout** — Chrome suspends MV3 service workers after ~30 seconds of inactivity. The keepalive mechanism (sends a ping every 20s) reduces that risk, but if Chrome is under heavy memory pressure, the worker may still be evicted and require a fresh connect attempt unless auto-connect is enabled.
 
 - **`chrome://` and extension pages** — Chrome extensions cannot inject scripts into `chrome://` URLs, `chrome-extension://` pages, or the Chrome Web Store. Tools like `click`, `type_text`, and `evaluate_script` will fail on these pages.
 

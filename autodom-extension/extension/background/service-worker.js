@@ -12,6 +12,9 @@ let isConnected = false;
 let keepAliveInterval = null;
 let shouldRunMcp = false;
 let _sessionTimedOut = false; // Set when server or extension inactivity timeout fires
+const ACTIVITY_LOG_KEY = "autodomActivityLogs";
+const ACTIVITY_LOG_LIMIT = 250;
+const activityStorage = chrome.storage.session || chrome.storage.local;
 
 let aiProviderSettings = {
   source: "ide",
@@ -19,6 +22,55 @@ let aiProviderSettings = {
   model: "",
   baseUrl: "",
 };
+
+function _formatLogText(args) {
+  return args
+    .map((arg) => {
+      if (typeof arg === "string") return arg;
+      if (arg && typeof arg.message === "string") return arg.message;
+      try {
+        return String(arg);
+      } catch (_) {
+        return "";
+      }
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+function appendActivityLog(level, source, ...args) {
+  const text = _formatLogText(args);
+  if (!text) return;
+  const entry = {
+    ts: Date.now(),
+    level: level || "info",
+    source: source || "background",
+    text,
+  };
+
+  activityStorage.get([ACTIVITY_LOG_KEY], (result) => {
+    const logs = Array.isArray(result?.[ACTIVITY_LOG_KEY])
+      ? result[ACTIVITY_LOG_KEY]
+      : [];
+    logs.push(entry);
+    if (logs.length > ACTIVITY_LOG_LIMIT) {
+      logs.splice(0, logs.length - ACTIVITY_LOG_LIMIT);
+    }
+    activityStorage.set({ [ACTIVITY_LOG_KEY]: logs }).catch(() => {});
+  });
+}
+
+function _debugLog(...args) {
+  appendActivityLog("info", "background", ...args);
+}
+
+function _debugWarn(...args) {
+  appendActivityLog("warn", "background", ...args);
+}
+
+function _debugError(...args) {
+  appendActivityLog("error", "background", ...args);
+}
 
 // ─── Direct AI Provider Calls ────────────────────────────────
 // These functions let the service worker call OpenAI, Anthropic, or
@@ -96,7 +148,7 @@ async function _callOpenAI(text, context, conversationHistory) {
   const model = aiProviderSettings.model || "gpt-4.1-mini";
   const messages = _buildMessages(text, context, conversationHistory);
 
-  console.log(
+  _debugLog(
     "[AutoDOM SW] Calling OpenAI:",
     baseUrl + "/chat/completions",
     "model:",
@@ -144,7 +196,7 @@ async function _callAnthropic(text, context, conversationHistory) {
   }
   msgs.push({ role: "user", content: text });
 
-  console.log("[AutoDOM SW] Calling Anthropic, model:", model);
+  _debugLog("[AutoDOM SW] Calling Anthropic, model:", model);
 
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -187,7 +239,7 @@ async function _callOllama(text, context, conversationHistory) {
   const model = aiProviderSettings.model || "llama3.2";
   const messages = _buildMessages(text, context, conversationHistory);
 
-  console.log(
+  _debugLog(
     "[AutoDOM SW] Calling Ollama:",
     baseUrl + "/api/chat",
     "model:",
@@ -233,10 +285,10 @@ function startInactivityTimer() {
     const idleMins = (idleMs / 60000).toFixed(1);
 
     if (idleMs >= INACTIVITY_TIMEOUT_MS) {
-      console.warn(
+      _debugWarn(
         `[AutoDOM] Session idle for ${idleMins} minutes — auto-disconnecting`,
       );
-      // Mark as timed out BEFORE disconnect so onclose won't auto-reconnect
+      // Mark as timed out BEFORE disconnect so onclose treats this as a final stop
       _sessionTimedOut = true;
       shouldRunMcp = false;
       stopAutoConnect();
@@ -251,7 +303,7 @@ function startInactivityTimer() {
       // Broadcast after disconnect so popup and content scripts know
       broadcastStatus(
         false,
-        `Session auto-closed after ${idleMins} min of inactivity. Use any tool to reconnect.`,
+        `Session auto-closed after ${idleMins} min of inactivity. Click Connect to start again.`,
         "warn",
       );
       // Also send explicit MCP stop to all tabs so chat-panel tears down
@@ -262,7 +314,7 @@ function startInactivityTimer() {
     // Warn at 80% of timeout (8 minutes)
     if (idleMs >= INACTIVITY_TIMEOUT_MS * 0.8) {
       const remainingSecs = Math.round((INACTIVITY_TIMEOUT_MS - idleMs) / 1000);
-      console.log(
+      _debugLog(
         `[AutoDOM] Inactivity warning: idle ${idleMins}m, auto-disconnect in ${remainingSecs}s`,
       );
       broadcastStatus(
@@ -332,7 +384,7 @@ chrome.storage.onChanged.addListener((changes) => {
       ...rateLimitConfig,
       ...changes.rateLimitConfig.newValue,
     };
-    console.log("[AutoDOM] Rate limit config updated:", rateLimitConfig);
+    _debugLog("[AutoDOM] Rate limit config updated:", rateLimitConfig);
   }
 });
 
@@ -460,7 +512,7 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.confirmBeforeSubmitConfig) {
     confirmBeforeSubmitConfig.enabled =
       !!changes.confirmBeforeSubmitConfig.newValue?.enabled;
-    console.log(
+    _debugLog(
       "[AutoDOM] Confirm-before-submit:",
       confirmBeforeSubmitConfig.enabled ? "ON" : "OFF",
     );
@@ -699,7 +751,7 @@ function connectWebSocket(port) {
       startKeepAlive();
       startInactivityTimer();
       broadcastStatus(true, "Connected to MCP bridge server", "success");
-      console.log("[AutoDOM] WebSocket connected");
+      _debugLog("[AutoDOM] WebSocket connected");
       // Show session border and chat panel on all tabs
       broadcastToAllTabs([
         { type: "SHOW_SESSION_BORDER" },
@@ -715,7 +767,7 @@ function connectWebSocket(port) {
 
         // Handle AI chat responses from the bridge server
         if (message.type === "AI_CHAT_RESPONSE") {
-          console.log(
+          _debugLog(
             "[AutoDOM SW] AI_CHAT_RESPONSE received, id:",
             message.id,
             "hasResponse:",
@@ -733,7 +785,7 @@ function connectWebSocket(port) {
               error: message.error || null,
             });
           } else {
-            console.warn(
+            _debugWarn(
               "[AutoDOM SW] No pending AI request for id:",
               message.id,
               "pendingCount:",
@@ -753,8 +805,8 @@ function connectWebSocket(port) {
           return;
         }
         if (message.type === "SESSION_TIMEOUT") {
-          console.warn("[AutoDOM] Server closed session:", message.message);
-          // Mark as timed out BEFORE disconnect so onclose won't auto-reconnect
+          _debugWarn("[AutoDOM] Server closed session:", message.message);
+          // Mark as timed out BEFORE disconnect so onclose treats this as a final stop
           _sessionTimedOut = true;
           shouldRunMcp = false;
           stopAutoConnect();
@@ -773,7 +825,7 @@ function connectWebSocket(port) {
         }
 
         if (message.type === "TOOL_CALL") {
-          console.log(
+          _debugLog(
             "[AutoDOM SW] TOOL_CALL from bridge:",
             message.tool,
             "id:",
@@ -808,7 +860,7 @@ function connectWebSocket(port) {
             serverPath: message.serverPath,
             serverPort: message.port,
           });
-          console.log("[AutoDOM] Server path:", message.serverPath);
+          _debugLog("[AutoDOM] Server path:", message.serverPath);
         }
         if (message.type === "PING") {
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -816,22 +868,23 @@ function connectWebSocket(port) {
           }
         }
       } catch (err) {
-        console.error("[AutoDOM] Message handling error:", err);
+        _debugError("[AutoDOM] Message handling error:", err);
       }
     };
 
     ws.onclose = (event) => {
+      ws = null;
       isConnected = false;
       stopKeepAlive();
       stopInactivityTimer();
-      console.log(
+      resolvePendingAiRequests("MCP disconnected before the AI agent replied.");
+      _debugLog(
         `[AutoDOM] WebSocket disconnected: code=${event.code}, reason=${event.reason}, wasClean=${event.wasClean}`,
       );
 
-      // Check if this close was due to an inactivity timeout (server or extension side).
-      // If so, do NOT auto-reconnect — tear down everything instead.
+      // Any close transitions the extension into a fully stopped state.
       if (_sessionTimedOut) {
-        console.log(
+        _debugLog(
           "[AutoDOM] WebSocket closed after session timeout — not reconnecting",
         );
         _sessionTimedOut = false;
@@ -844,24 +897,15 @@ function connectWebSocket(port) {
         ]);
         broadcastMcpStopToAllTabs();
         chrome.storage.local.set({ mcpRunning: false });
-      } else if (shouldRunMcp) {
-        // Don't hide border/chat on temporary disconnects — we're about to
-        // reconnect. This avoids the panel flickering closed and re-opened.
-        broadcastStatus(false, "Reconnecting to MCP bridge server...", "info");
-        const reconnectDelay = 3000;
-        console.log(`[AutoDOM] Will auto-reconnect in ${reconnectDelay}ms...`);
-        setTimeout(() => {
-          if (
-            shouldRunMcp &&
-            !_sessionTimedOut &&
-            (!ws || ws.readyState === WebSocket.CLOSED)
-          ) {
-            connectWebSocket(getCurrentPort());
-          }
-        }, reconnectDelay);
       } else {
-        // Manual disconnect or not supposed to be running — hide everything
-        broadcastStatus(false, "Disconnected from MCP bridge server", "warn");
+        shouldRunMcp = false;
+        stopAutoConnect();
+        chrome.storage.local.set({ mcpRunning: false });
+        broadcastStatus(
+          false,
+          "Disconnected from MCP bridge server. Click Connect to retry.",
+          "warn",
+        );
         broadcastToAllTabs([
           { type: "HIDE_SESSION_BORDER" },
           { type: "HIDE_CHAT_PANEL" },
@@ -871,9 +915,7 @@ function connectWebSocket(port) {
     };
 
     ws.onerror = (err) => {
-      // Use console.warn instead of console.error to avoid flooding
-      // Chrome's extension error panel during auto-connect retries.
-      console.warn(
+      _debugWarn(
         "[AutoDOM] WebSocket error:",
         err?.message || err?.type || "connection refused",
       );
@@ -887,27 +929,19 @@ function connectWebSocket(port) {
           "Bridge not running. Click Connect or enable auto-connect.",
           "info",
         );
-        return;
-      }
-      // Only broadcast to popup if this isn't a routine auto-connect failure
-      if (_autoConnectAttempt <= 1) {
-        broadcastStatus(
-          false,
-          "Connection error — is the MCP server running?",
-          "error",
-        );
       }
     };
   } catch (err) {
-    console.warn("[AutoDOM] Failed to connect:", err.message || err);
+    _debugWarn("[AutoDOM] Failed to connect:", err.message || err);
   }
 }
 
 function disconnectWebSocket() {
   stopKeepAlive();
   stopInactivityTimer();
+  resolvePendingAiRequests("MCP stopped before the AI agent replied.");
   if (ws) {
-    ws.onclose = null; // prevent reconnect
+    ws.onclose = null; // prevent duplicate stop handling
     ws.close();
     ws = null;
   }
@@ -925,7 +959,7 @@ function disconnectWebSocket() {
 // and detect dead connections via response timeout.
 let _lastPongTime = 0;
 const KEEPALIVE_INTERVAL_MS = 20000;
-const KEEPALIVE_TIMEOUT_MS = 10000; // If no pong within this time, reconnect
+const KEEPALIVE_TIMEOUT_MS = 10000; // If no pong within this time, disconnect
 
 const _KEEPALIVE_MSG = JSON.stringify({ type: "KEEPALIVE" });
 
@@ -940,7 +974,7 @@ function startKeepAlive() {
         Date.now() - _lastPongTime >
           KEEPALIVE_INTERVAL_MS + KEEPALIVE_TIMEOUT_MS
       ) {
-        console.warn("[AutoDOM] Server unresponsive, reconnecting...");
+        _debugWarn("[AutoDOM] Server unresponsive, disconnecting...");
         ws.close();
         return;
       }
@@ -961,7 +995,7 @@ function stopKeepAlive() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "USER_ACTION") {
-    console.log(
+    _debugLog(
       "[AutoDOM SW] onMessage:",
       message.type,
       "from:",
@@ -975,7 +1009,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     _startupRestoreOnly = false;
     _sessionTimedOut = false; // Clear timeout flag on fresh start
     chrome.storage.local.set({ mcpPort: port, mcpRunning: true });
-    startAutoConnect(port);
 
     // Connect to the WebSocket server (started by IDE or manually)
     connectWebSocket(port);
@@ -990,9 +1023,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "ACTIVITY_LOG_APPEND") {
+    appendActivityLog(
+      message.level || "info",
+      message.source ||
+        (sender?.tab?.id ? `tab:${sender.tab.id}` : "extension"),
+      message.text || "",
+    );
+    return false;
+  }
+
   if (message.type === "STOP_MCP") {
     shouldRunMcp = false;
     stopAutoConnect();
+    chrome.storage.local.set({ autoConnect: false, mcpRunning: false });
     disconnectWebSocket();
     sendResponse({ success: true });
     return false;
@@ -1050,7 +1094,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "SET_AI_PROVIDER") {
     const incomingProvider = message.provider || {};
-    console.log(
+    _debugLog(
       "[AutoDOM SW] SET_AI_PROVIDER received:",
       JSON.stringify({
         source: incomingProvider.source,
@@ -1066,7 +1110,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       model: incomingProvider.model || "",
       baseUrl: incomingProvider.baseUrl || "",
     };
-    console.log(
+    _debugLog(
       "[AutoDOM SW] aiProviderSettings updated:",
       JSON.stringify({
         source: aiProviderSettings.source,
@@ -1085,7 +1129,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         aiProviderBaseUrl: aiProviderSettings.baseUrl,
       },
       () => {
-        console.log(
+        _debugLog(
           "[AutoDOM SW] Provider settings persisted to chrome.storage.local",
         );
       },
@@ -1208,7 +1252,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "CHAT_TOOL_CALL") {
     const { tool, params, requestId } = message;
-    console.log(
+    _debugLog(
       "[AutoDOM SW] CHAT_TOOL_CALL received:",
       tool,
       "reqId:",
@@ -1218,7 +1262,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const handler = TOOL_HANDLERS.get(tool);
     if (!handler) {
-      console.warn("[AutoDOM SW] Unknown tool:", tool);
+      _debugWarn("[AutoDOM SW] Unknown tool:", tool);
       sendResponse({ error: `Unknown tool: ${tool}`, requestId });
       return false;
     }
@@ -1226,9 +1270,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Execute the tool asynchronously and send result back
     (async () => {
       try {
-        console.log("[AutoDOM SW] Executing tool:", tool);
+        _debugLog("[AutoDOM SW] Executing tool:", tool);
         const result = await handler(params || {});
-        console.log(
+        _debugLog(
           "[AutoDOM SW] Tool result for",
           tool,
           ":",
@@ -1236,7 +1280,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
         sendResponse(result);
       } catch (err) {
-        console.error("[AutoDOM SW] Tool exception:", tool, err.message);
+        _debugError("[AutoDOM SW] Tool exception:", tool, err.message);
         sendResponse({ error: err.message || String(err), requestId });
       }
     })();
@@ -1253,7 +1297,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // bridge so the IDE agent can handle it.
   if (message.type === "CHAT_AI_MESSAGE") {
     const { text, context, conversationHistory, provider } = message;
-    console.log(
+    _debugLog(
       "[AutoDOM SW] CHAT_AI_MESSAGE received, text:",
       (text || "").substring(0, 80),
     );
@@ -1276,7 +1320,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const isOllama = providerType === "ollama";
     const isDirectProvider = hasDirectKey || hasDirectAnthropic || isOllama;
 
-    console.log(
+    _debugLog(
       "[AutoDOM SW] CHAT_AI_MESSAGE: providerType =",
       providerType,
       "| isDirectProvider =",
@@ -1294,7 +1338,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // ─── Direct Provider Path (no bridge server needed) ──────
     // Service worker calls OpenAI / Anthropic / Ollama API directly.
     if (isDirectProvider) {
-      console.log("[AutoDOM SW] Using DIRECT provider path for:", providerType);
+      _debugLog("[AutoDOM SW] Using DIRECT provider path for:", providerType);
 
       (async () => {
         try {
@@ -1304,7 +1348,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             context || {},
             conversationHistory || [],
           );
-          console.log(
+          _debugLog(
             "[AutoDOM SW] Direct provider responded, length:",
             (result.response || "").length,
           );
@@ -1315,7 +1359,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             error: null,
           });
         } catch (err) {
-          console.error("[AutoDOM SW] Direct provider error:", err.message);
+          _debugError("[AutoDOM SW] Direct provider error:", err.message);
           sendResponse({
             type: "AI_CHAT_RESPONSE",
             error: `${providerType} error: ${err.message}`,
@@ -1328,7 +1372,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ─── IDE / MCP Path (requires bridge server) ─────────────
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn(
+      _debugWarn(
         "[AutoDOM SW] CHAT_AI_MESSAGE: bridge unavailable for IDE mode",
       );
       sendResponse({
@@ -1338,9 +1382,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           "Tip: Select a direct AI provider (GPT, Claude, or Ollama) in the extension settings to use AI chat without the bridge server.",
         type: "AI_CHAT_RESPONSE",
       });
-      if (shouldRunMcp) {
-        startAutoConnect(getCurrentPort());
-      }
       return false;
     }
 
@@ -1372,7 +1413,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     pendingAiRequests.set(aiRequestId, {
       resolve: (result) => {
-        console.log(
+        _debugLog(
           "[AutoDOM SW] AI response resolved for id:",
           aiRequestId,
           "hasError:",
@@ -1384,7 +1425,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
 
     try {
-      console.log(
+      _debugLog(
         "[AutoDOM SW] Sending AI_CHAT_REQUEST to bridge, id:",
         aiRequestId,
       );
@@ -1407,7 +1448,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // If MCP is connected, send the toggle to the content script.
   // If the content script is not injected yet, inject it first.
   if (message.type === "TOGGLE_CHAT_PANEL") {
-    console.log(
+    _debugLog(
       "[AutoDOM SW] TOGGLE_CHAT_PANEL received, isConnected:",
       isConnected,
     );
@@ -1418,14 +1459,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           currentWindow: true,
         });
         const tab = tabs[0];
-        console.log(
+        _debugLog(
           "[AutoDOM SW] Active tab:",
           tab ? tab.id + " - " + (tab.url || "").substring(0, 60) : "none",
         );
         if (tab && isInjectableTab(tab)) {
           // Try sending the toggle message to the content script
           try {
-            console.log(
+            _debugLog(
               "[AutoDOM SW] Sending TOGGLE_CHAT_PANEL to tab",
               tab.id,
               "mcpActive:",
@@ -1435,13 +1476,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               type: "TOGGLE_CHAT_PANEL",
               mcpActive: isConnected,
             });
-            console.log(
+            _debugLog(
               "[AutoDOM SW] TOGGLE_CHAT_PANEL sent successfully to tab",
               tab.id,
             );
           } catch (_msgErr) {
             // Content script not injected yet — inject it, then retry
-            console.log(
+            _debugLog(
               "[AutoDOM SW] Content script not found (error:",
               _msgErr?.message,
               "), injecting into tab",
@@ -1466,7 +1507,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 })
                 .catch(() => {});
             } catch (injectErr) {
-              console.error(
+              _debugError(
                 "[AutoDOM] Failed to inject content scripts:",
                 injectErr,
               );
@@ -1521,6 +1562,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Stores pending AI chat requests waiting for responses from the bridge
 const pendingAiRequests = new Map();
 let aiCallIdCounter = 0;
+
+function resolvePendingAiRequests(error) {
+  for (const [id, pending] of pendingAiRequests.entries()) {
+    pendingAiRequests.delete(id);
+    try {
+      pending.resolve({
+        type: "AI_CHAT_RESPONSE",
+        error,
+      });
+    } catch (_) {}
+  }
+}
 
 function broadcastStatus(connected, log, logLevel) {
   chrome.runtime
@@ -1636,7 +1689,7 @@ async function handleToolCall(tool, params, id) {
     const domain = getDomainFromTab(tab);
     const rateCheck = checkRateLimit(domain);
     if (!rateCheck.allowed) {
-      console.warn(`[AutoDOM] Rate limit blocked: ${tool} on ${domain}`);
+      _debugWarn(`[AutoDOM] Rate limit blocked: ${tool} on ${domain}`);
       return {
         error: rateCheck.error,
         rateLimited: true,
@@ -1648,7 +1701,7 @@ async function handleToolCall(tool, params, id) {
     }
   } catch (rlErr) {
     // Don't block tool execution if rate limiting itself fails
-    console.warn("[AutoDOM] Rate limit check failed:", rlErr.message);
+    _debugWarn("[AutoDOM] Rate limit check failed:", rlErr.message);
   }
 
   // ─── Confirm-Before-Submit Check ─────────────────────────
@@ -1665,7 +1718,7 @@ async function handleToolCall(tool, params, id) {
     // Auto-expire after 5 minutes
     setTimeout(() => pendingSubmitConfirmations.delete(confirmId), 300000);
 
-    console.warn(
+    _debugWarn(
       `[AutoDOM] Sensitive action held: ${tool} (confirmId=${confirmId})`,
     );
     return {
@@ -3202,13 +3255,13 @@ chrome.commands.onCommand.addListener(async (command) => {
         .catch(() => {});
     }
   } catch (err) {
-    console.error("[AutoDOM] Command handler error:", err);
+    _debugError("[AutoDOM] Command handler error:", err);
   }
 });
 
 // ─── Auto-connect on service worker startup ──────────────────
-// The extension reconnects automatically when the user opts in or when a
-// current MCP session is being restored after a worker restart.
+// The extension auto-connects on startup only when the user explicitly
+// enables auto-connect in the popup.
 
 let autoConnectInterval = null;
 let autoConnectPort = null;
@@ -3227,7 +3280,7 @@ function startAutoConnect(port) {
     _autoConnectAttempt++;
     // Only log every 6th attempt to reduce console spam
     if (_autoConnectAttempt === 1 || _autoConnectAttempt % 6 === 0) {
-      console.log(
+      _debugLog(
         `[AutoDOM] Auto-connect: trying ws://127.0.0.1:${nextPort}... (attempt ${_autoConnectAttempt})`,
       );
     }
@@ -3251,6 +3304,7 @@ function stopAutoConnect() {
 }
 
 // Restore desired state on service worker load.
+// Only the explicit auto-connect preference survives worker restarts.
 chrome.storage.local.get(
   [
     "mcpPort",
@@ -3264,9 +3318,8 @@ chrome.storage.local.get(
   (result) => {
     const port = result.mcpPort || 9876;
     const autoConnect = result.autoConnect === true;
-    const restoreRunning = result.mcpRunning === true;
-    shouldRunMcp = autoConnect || restoreRunning;
-    _startupRestoreOnly = !autoConnect && restoreRunning;
+    shouldRunMcp = autoConnect;
+    _startupRestoreOnly = autoConnect;
 
     aiProviderSettings = {
       source: result.aiProviderSource || "ide",
@@ -3275,7 +3328,7 @@ chrome.storage.local.get(
       baseUrl: result.aiProviderBaseUrl || "",
     };
 
-    console.log(
+    _debugLog(
       "[AutoDOM SW] Startup: loaded provider settings from storage:",
       JSON.stringify({
         source: aiProviderSettings.source,
@@ -3291,7 +3344,7 @@ chrome.storage.local.get(
       aiProviderSettings.source !== "ide" &&
       aiProviderSettings.source !== "mcp"
     ) {
-      console.log(
+      _debugLog(
         "[AutoDOM SW] Direct AI provider configured:",
         aiProviderSettings.source,
         "— chat will call provider API directly (no bridge needed)",
@@ -3315,10 +3368,7 @@ chrome.runtime.onInstalled.addListener(() => {
       const port = result.mcpPort || 9876;
       const autoConnect =
         typeof result.autoConnect === "boolean" ? result.autoConnect : false;
-      const initialRunning =
-        typeof result.mcpRunning === "boolean"
-          ? result.mcpRunning
-          : autoConnect;
+      const initialRunning = autoConnect;
 
       shouldRunMcp = initialRunning;
       _startupRestoreOnly = false;

@@ -33,10 +33,31 @@
 
   // Declared early so _log/_err closures can reference it without TDZ issues
   let _contextInvalidated = false;
+  function _pushActivityLog(level, args) {
+    try {
+      chrome.runtime.sendMessage({
+        type: "ACTIVITY_LOG_APPEND",
+        level: level || "info",
+        source: "chat-panel",
+        text: args
+          .map((arg) => {
+            if (typeof arg === "string") return arg;
+            if (arg && typeof arg.message === "string") return arg.message;
+            try {
+              return String(arg);
+            } catch (_) {
+              return "";
+            }
+          })
+          .filter(Boolean)
+          .join(" "),
+      });
+    } catch (_) {}
+  }
 
   const _log = (...args) => {
     if (_contextInvalidated) return;
-    console.log("[AutoDOM Chat]", ...args);
+    _pushActivityLog("info", args);
   };
   const _err = (...args) => {
     if (_contextInvalidated) return;
@@ -59,7 +80,7 @@
     ) {
       return;
     }
-    console.error("[AutoDOM Chat]", ...args);
+    _pushActivityLog("error", args);
   };
 
   _log("Content script loading...");
@@ -1608,18 +1629,6 @@
               hasDirectKey);
           const connected = bridgeConnected || directProviderReady;
           _lastKnownProvider = providerSrc;
-          _log(
-            "checkConnectionStatus: response:",
-            JSON.stringify(response),
-            "bridgeConnected:",
-            bridgeConnected,
-            "directProviderReady:",
-            directProviderReady,
-            "provider:",
-            providerSrc,
-            "connected:",
-            connected,
-          );
           setConnectionStatus(connected);
           if (connected && !isMcpActive) {
             setMcpActive(true);
@@ -2050,7 +2059,7 @@
     }
 
     // ─── AI Mode ─────────────────────────────────────────────
-    // Refresh connection status, then route to MCP AI agent or fallback
+    // Refresh connection status once, then route to MCP AI agent or fallback
     _log("AI mode: refreshing connection status...");
     const freshConnected = await checkConnectionStatus();
     _log(
@@ -2060,27 +2069,23 @@
       isConnected,
     );
 
-    if (!isConnected) {
-      // Re-check — provider may have been configured since last poll
-      const recheckConnected = await checkConnectionStatus();
-      if (!recheckConnected) {
-        // Try local NLP-to-tool mapping as fallback even when disconnected
-        const localCommand = parseNaturalLanguage(text);
-        if (localCommand) {
-          await executeToolCommand(localCommand);
-          return;
-        }
-        addMessage(
-          "system",
-          "Not connected to any AI provider.\n\n" +
-            "To enable AI chat, go to the AutoDOM extension popup → Config tab and select a provider:\n" +
-            "• **Connect with GPT** — enter your OpenAI API key\n" +
-            "• **Connect with Claude** — enter your Anthropic API key\n" +
-            "• **Connect with Ollama** — free, runs locally (no key needed)\n\n" +
-            "You can still use slash commands like /dom, /screenshot, /click, or /help while offline.",
-        );
+    if (!freshConnected) {
+      // Try local NLP-to-tool mapping as fallback even when disconnected
+      const localCommand = parseNaturalLanguage(text);
+      if (localCommand) {
+        await executeToolCommand(localCommand);
         return;
       }
+      addMessage(
+        "system",
+        "Not connected to any AI provider.\n\n" +
+          "To enable AI chat, go to the AutoDOM extension popup → Config tab and select a provider:\n" +
+          "• **Connect with GPT** — enter your OpenAI API key\n" +
+          "• **Connect with Claude** — enter your Anthropic API key\n" +
+          "• **Connect with Ollama** — free, runs locally (no key needed)\n\n" +
+          "You can still use slash commands like /dom, /screenshot, /click, or /help while offline.",
+      );
+      return;
     }
 
     // Route to MCP AI agent for intelligent, context-aware response
@@ -2698,9 +2703,8 @@
     if (message.type === "STATUS_UPDATE") {
       const connected = !!message.connected;
       setConnectionStatus(connected);
-      // Only promote to active, never demote via STATUS_UPDATE —
-      // brief reconnects should not tear down the open panel.
-      // Explicit HIDE_CHAT_PANEL handles real teardown.
+      // Only promote to active here. Explicit HIDE_CHAT_PANEL handles teardown
+      // when the MCP session actually stops.
       if (connected && !isMcpActive) {
         setMcpActive(true);
       }
