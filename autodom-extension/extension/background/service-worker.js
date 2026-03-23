@@ -11,6 +11,7 @@ let wsPort = 9876;
 let isConnected = false;
 let keepAliveInterval = null;
 let shouldRunMcp = false;
+let autoConnectEnabled = false;
 let _sessionTimedOut = false; // Set when server or extension inactivity timeout fires
 const ACTIVITY_LOG_KEY = "autodomActivityLogs";
 const ACTIVITY_LOG_LIMIT = 250;
@@ -285,6 +286,13 @@ function startInactivityTimer() {
     const idleMins = (idleMs / 60000).toFixed(1);
 
     if (idleMs >= INACTIVITY_TIMEOUT_MS) {
+      if (autoConnectEnabled) {
+        _debugLog(
+          `[AutoDOM] Session idle for ${idleMins} minutes — auto-connect is enabled, keeping the bridge connected`,
+        );
+        lastToolActivityTime = Date.now();
+        return;
+      }
       _debugWarn(
         `[AutoDOM] Session idle for ${idleMins} minutes — auto-disconnecting`,
       );
@@ -750,7 +758,11 @@ function connectWebSocket(port) {
       // first setInterval tick.
       ws.send(JSON.stringify({ type: "KEEPALIVE" }));
       startKeepAlive();
-      startInactivityTimer();
+      if (!autoConnectEnabled) {
+        startInactivityTimer();
+      } else {
+        stopInactivityTimer();
+      }
       broadcastStatus(true, "Connected to MCP bridge server", "success");
       _debugLog("[AutoDOM] WebSocket connected");
       // Show session border and chat panel on all tabs
@@ -807,19 +819,31 @@ function connectWebSocket(port) {
         }
         if (message.type === "SESSION_TIMEOUT") {
           _debugWarn("[AutoDOM] Server closed session:", message.message);
-          // Mark as timed out BEFORE disconnect so onclose treats this as a final stop
-          _sessionTimedOut = true;
-          shouldRunMcp = false;
-          stopAutoConnect();
+          const keepRetrying = autoConnectEnabled;
+          if (!keepRetrying) {
+            // Mark as timed out BEFORE disconnect so onclose treats this as a final stop
+            _sessionTimedOut = true;
+            shouldRunMcp = false;
+            stopAutoConnect();
+          }
           stopInactivityTimer();
           disconnectWebSocket();
-          chrome.storage.local.set({ mcpRunning: false });
+          chrome.storage.local.set({ mcpRunning: keepRetrying });
           // Explicitly hide border and chat on ALL tabs (including non-active)
           broadcastToAllTabs([
             { type: "HIDE_SESSION_BORDER" },
             { type: "HIDE_CHAT_PANEL" },
           ]);
-          broadcastStatus(false, message.message, "warn");
+          if (keepRetrying) {
+            broadcastStatus(
+              false,
+              `${message.message} Auto-connect is retrying.`,
+              "warn",
+            );
+            startAutoConnect(getCurrentPort());
+          } else {
+            broadcastStatus(false, message.message, "warn");
+          }
           // Also send explicit MCP stop to all tabs so chat-panel tears down
           broadcastMcpStopToAllTabs();
           return;
@@ -1042,6 +1066,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "STOP_MCP") {
     shouldRunMcp = false;
+    autoConnectEnabled = false;
     stopAutoConnect();
     chrome.storage.local.set({ autoConnect: false, mcpRunning: false });
     disconnectWebSocket();
@@ -1051,17 +1076,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "SET_AUTO_CONNECT") {
     const autoConnect = !!message.value;
+    autoConnectEnabled = autoConnect;
     chrome.storage.local.set({ autoConnect });
-    if (autoConnect && !shouldRunMcp) {
+    if (autoConnect) {
       shouldRunMcp = true;
       _startupRestoreOnly = false;
       chrome.storage.local.set({ mcpRunning: true });
-      startAutoConnect(getCurrentPort());
-    } else if (!autoConnect && !isConnected) {
-      shouldRunMcp = false;
+      if (isConnected) {
+        stopInactivityTimer();
+      } else {
+        startAutoConnect(getCurrentPort());
+      }
+    } else {
       _startupRestoreOnly = false;
-      stopAutoConnect();
-      chrome.storage.local.set({ mcpRunning: false });
+      if (isConnected) {
+        startInactivityTimer();
+      } else {
+        shouldRunMcp = false;
+        stopAutoConnect();
+        chrome.storage.local.set({ mcpRunning: false });
+      }
     }
     sendResponse({ success: true });
     return false;
@@ -3325,6 +3359,7 @@ chrome.storage.local.get(
   (result) => {
     const port = result.mcpPort || 9876;
     const autoConnect = result.autoConnect === true;
+    autoConnectEnabled = autoConnect;
     shouldRunMcp = autoConnect;
     _startupRestoreOnly = autoConnect;
 
