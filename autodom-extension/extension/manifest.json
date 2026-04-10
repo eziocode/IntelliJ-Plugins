@@ -3,16 +3,19 @@
   "name": "AutoDOM",
   "version": "1.2.0",
   "description": "Local MCP server for AI-driven browser automation. Connect your IDE agent to control the browser. Includes an inline AI chat panel powered by MCP.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "autodom@zohocorp.com",
+      "strict_min_version": "128.0"
+    }
+  },
   "permissions": [
     "activeTab",
     "scripting",
     "tabs",
     "storage",
-    "debugger",
     "cookies",
-    "nativeMessaging",
-    "clipboardWrite",
-    "sidePanel"
+    "clipboardWrite"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
