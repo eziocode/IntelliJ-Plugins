@@ -8,6 +8,7 @@
 
 let ws = null;
 let wsPort = 9876;
+let _requestedPort = 9876; // Port the user/startup explicitly asked for — never mutated by fallback logic
 let isConnected = false;
 let keepAliveInterval = null;
 let shouldRunMcp = false;
@@ -17,7 +18,46 @@ let autoConnectFallbackTried = false;
 let _sessionTimedOut = false; // Set when server or extension inactivity timeout fires
 const ACTIVITY_LOG_KEY = "autodomActivityLogs";
 const ACTIVITY_LOG_LIMIT = 250;
-const activityStorage = chrome.storage.session || chrome.storage.local;
+const activityStorage = (() => {
+  try {
+    return chrome.storage.session || chrome.storage.local;
+  } catch (_) {
+    return chrome.storage.local;
+  }
+})();
+
+// Detect Firefox by checking for Gecko-specific manifest entry.
+// chrome.debugger (CDP) is not available in Firefox; tools that depend on it
+// will throw a clear "not supported" error rather than crashing silently.
+const IS_FIREFOX = (() => {
+  try {
+    const manifest = chrome.runtime.getManifest();
+    return !!(
+      manifest.browser_specific_settings &&
+      manifest.browser_specific_settings.gecko
+    );
+  } catch (_) {
+    return false;
+  }
+})();
+
+let _pendingToolLogResolve = null; // Resolve callback for GET_TOOL_LOGS roundtrip to server
+
+// ─── Tool Error Log ───────────────────────────────────────────
+// Ring buffer for tool errors visible in the extension Logs tab.
+const TOOL_ERROR_LOG_MAX = 200;
+const _swToolErrorLog = [];
+
+function _swLogToolError(tool, error, extra) {
+  const entry = {
+    ts: new Date().toISOString(),
+    tool,
+    error: typeof error === "string" ? error : (error?.message || String(error)),
+    extra: extra || undefined,
+  };
+  if (_swToolErrorLog.length >= TOOL_ERROR_LOG_MAX) _swToolErrorLog.shift();
+  _swToolErrorLog.push(entry);
+}
 
 let aiProviderSettings = {
   source: "ide",
@@ -816,6 +856,16 @@ function connectWebSocket(port) {
           return;
         }
 
+        // Handle tool log responses from server
+        if (message.type === "TOOL_LOGS_RESPONSE") {
+          if (_pendingToolLogResolve) {
+            const resolve = _pendingToolLogResolve;
+            _pendingToolLogResolve = null;
+            resolve({ serverLogs: message.logs || [], logFile: message.logFile });
+          }
+          return;
+        }
+
         // Handle inactivity warnings / session timeout from server
         if (message.type === "INACTIVITY_WARNING") {
           broadcastStatus(
@@ -962,13 +1012,16 @@ function connectWebSocket(port) {
           );
           startAutoConnect(fallbackPort);
         } else if (shouldRunMcp) {
+          // After the fallback cycle is exhausted, always retry the user-requested
+          // port so the extension doesn't permanently drift to lastConnectedPort.
+          wsPort = _requestedPort;
           chrome.storage.local.set({ mcpRunning: true });
           broadcastStatus(
             false,
             "Disconnected from MCP bridge server. Auto-reconnect is retrying.",
             "warn",
           );
-          startAutoConnect(currentPort);
+          startAutoConnect(_requestedPort);
         } else {
           stopAutoConnect();
           chrome.storage.local.set({ mcpRunning: false });
@@ -1094,6 +1147,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "START_MCP") {
     const port = message.port || getCurrentPort();
     wsPort = port;
+    _requestedPort = port;
     shouldRunMcp = true;
     _startupRestoreOnly = false;
     _sessionTimedOut = false; // Clear timeout flag on fresh start
@@ -1351,6 +1405,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "GET_TOOL_LOGS") {
+    (async () => {
+      const extensionLogs = _swToolErrorLog.slice();
+      let serverLogs = [];
+      let logFile = null;
+
+      if (isConnected && ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          const serverData = await new Promise((resolve) => {
+            _pendingToolLogResolve = resolve;
+            ws.send(JSON.stringify({ type: "GET_TOOL_LOGS" }));
+            setTimeout(() => {
+              if (_pendingToolLogResolve === resolve) {
+                _pendingToolLogResolve = null;
+                resolve({ serverLogs: [], logFile: null });
+              }
+            }, 3000);
+          });
+          serverLogs = serverData.serverLogs || [];
+          logFile = serverData.logFile || null;
+        } catch (_) {}
+      }
+
+      sendResponse({ extensionLogs, serverLogs, logFile });
+    })();
+    return true;
+  }
+
   if (message.type === "CHAT_TOOL_CALL") {
     const { tool, params, requestId } = message;
     _debugLog(
@@ -1379,9 +1461,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ":",
           result ? (result.error ? "ERROR" : "OK") : "null",
         );
+        if (result && result.error) _swLogToolError(tool, result.error);
         sendResponse(result);
       } catch (err) {
         _debugError("[AutoDOM SW] Tool exception:", tool, err.message);
+        _swLogToolError(tool, err);
         sendResponse({ error: err.message || String(err), requestId });
       }
     })();
@@ -1777,6 +1861,18 @@ const TOOL_HANDLERS = new Map([
   ["click_by_index", toolClickByIndex],
   ["type_by_index", toolTypeByIndex],
   ["extract_data", toolExtractData],
+  // ─── Popup / Window Tools ──────────────────────────────────
+  ["list_popups", toolListPopups],
+  ["switch_to_popup", toolSwitchToPopup],
+  ["close_popup", toolClosePopup],
+  ["wait_for_popup", toolWaitForPopup],
+  // ─── iframe Tools ──────────────────────────────────────────
+  ["list_iframes", toolListIframes],
+  ["iframe_interact", toolIframeInteract],
+  // ─── Shadow DOM Tools ──────────────────────────────────────
+  ["list_shadow_roots", toolListShadowRoots],
+  ["shadow_interact", toolShadowInteract],
+  ["deep_query", toolDeepQuery],
 ]);
 
 async function handleToolCall(tool, params, id) {
@@ -1944,7 +2040,7 @@ async function toolClick(params) {
         text: el.textContent?.substring(0, 100),
       };
     },
-    [selector, text, dblClick],
+    [selector ?? null, text ?? null, dblClick ?? false],
   );
 }
 
@@ -2489,7 +2585,7 @@ async function toolScroll(params) {
         scrollX: window.scrollX,
       };
     },
-    [direction || "down", amount, selector || null, behavior || "smooth"],
+    [direction ?? "down", amount ?? 500, selector ?? null, behavior ?? "smooth"],
   );
 }
 
@@ -2526,7 +2622,7 @@ async function toolSelectOption(params) {
         selectedText: el.options[el.selectedIndex].text,
       };
     },
-    [selector, value, text, index],
+    [selector, value ?? null, text ?? null, index ?? null],
   );
 }
 
@@ -3421,6 +3517,8 @@ chrome.storage.local.get(
     const autoConnect = result.autoConnect === true;
     autoConnectEnabled = autoConnect;
     autoConnectFallbackTried = false;
+    wsPort = port;
+    _requestedPort = port;
     lastConnectedPort =
       Number(result.mcpLastConnectedPort || result.serverPort || port) || port;
     shouldRunMcp = autoConnect;
@@ -3478,6 +3576,8 @@ chrome.runtime.onInstalled.addListener(() => {
       shouldRunMcp = initialRunning;
       autoConnectFallbackTried = false;
       _startupRestoreOnly = false;
+      wsPort = port;
+      _requestedPort = port;
       lastConnectedPort =
         Number(result.mcpLastConnectedPort || result.serverPort || port) ||
         port;
@@ -3500,6 +3600,12 @@ chrome.runtime.onInstalled.addListener(() => {
 const _debuggerAttached = new Set();
 
 async function ensureDebugger(tabId) {
+  if (IS_FIREFOX) {
+    throw new Error(
+      "This tool uses Chrome DevTools Protocol (CDP) which is not supported in Firefox. " +
+        "Please use Chrome or Edge for this feature.",
+    );
+  }
   if (_debuggerAttached.has(tabId)) return;
   try {
     await chrome.debugger.attach({ tabId }, "1.3");
@@ -4045,4 +4151,820 @@ async function toolExtractData(params) {
     },
     [selector, fields, maxItems],
   );
+}
+
+// ─── Popup / Window Tools ────────────────────────────────────
+
+// List all browser windows including popups opened via window.open
+async function toolListPopups(params) {
+  const allWindows = await chrome.windows.getAll({ populate: true });
+  const windows = [];
+  for (const win of allWindows) {
+    const tabs = (win.tabs || []).map((t) => ({
+      id: t.id,
+      title: t.title,
+      url: t.url,
+      active: t.active,
+    }));
+    windows.push({
+      windowId: win.id,
+      type: win.type, // "normal", "popup", "panel", "app", "devtools"
+      state: win.state,
+      focused: win.focused,
+      width: win.width,
+      height: win.height,
+      top: win.top,
+      left: win.left,
+      tabCount: tabs.length,
+      tabs,
+    });
+  }
+  const popups = windows.filter((w) => w.type === "popup");
+  return {
+    totalWindows: windows.length,
+    popupCount: popups.length,
+    windows: params?.popupsOnly ? popups : windows,
+  };
+}
+
+// Switch focus to a popup/window by windowId, optionally activate a specific tab
+async function toolSwitchToPopup(params) {
+  const { windowId, tabId } = params;
+  if (!windowId) return { error: "windowId is required" };
+  try {
+    await chrome.windows.update(windowId, { focused: true });
+    if (tabId) {
+      await chrome.tabs.update(tabId, { active: true });
+    } else {
+      // Activate the first tab in the window
+      const tabs = await chrome.tabs.query({ windowId });
+      if (tabs.length > 0) {
+        await chrome.tabs.update(tabs[0].id, { active: true });
+      }
+    }
+    const win = await chrome.windows.get(windowId, { populate: true });
+    const activeTab = (win.tabs || []).find((t) => t.active);
+    return {
+      success: true,
+      windowId,
+      type: win.type,
+      activeTab: activeTab
+        ? { id: activeTab.id, title: activeTab.title, url: activeTab.url }
+        : null,
+    };
+  } catch (err) {
+    return { error: `Failed to switch to window: ${err.message}` };
+  }
+}
+
+// Close a popup/window by windowId
+async function toolClosePopup(params) {
+  const { windowId } = params;
+  if (!windowId) return { error: "windowId is required" };
+  try {
+    await chrome.windows.remove(windowId);
+    return { success: true, closedWindowId: windowId };
+  } catch (err) {
+    return { error: `Failed to close window: ${err.message}` };
+  }
+}
+
+// Wait for a new popup/window to appear
+async function toolWaitForPopup(params) {
+  const timeout = params?.timeout || 10000;
+  const existingWindows = await chrome.windows.getAll();
+  const existingIds = new Set(existingWindows.map((w) => w.id));
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        chrome.windows.onCreated.removeListener(listener);
+        resolve({
+          success: false,
+          error: `No new popup/window opened within ${timeout}ms`,
+        });
+      }
+    }, timeout);
+
+    const listener = async (win) => {
+      if (!existingIds.has(win.id) && !resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        chrome.windows.onCreated.removeListener(listener);
+        // Wait for the window to fully load
+        await new Promise((r) => setTimeout(r, 1500));
+        const updatedWin = await chrome.windows.get(win.id, {
+          populate: true,
+        });
+        // Optionally switch focus to the new popup
+        if (params?.switchTo !== false) {
+          await chrome.windows.update(win.id, { focused: true });
+        }
+        const activeTab = (updatedWin.tabs || []).find((t) => t.active);
+        resolve({
+          success: true,
+          window: {
+            windowId: updatedWin.id,
+            type: updatedWin.type,
+            state: updatedWin.state,
+            width: updatedWin.width,
+            height: updatedWin.height,
+          },
+          activeTab: activeTab
+            ? { id: activeTab.id, title: activeTab.title, url: activeTab.url }
+            : null,
+        });
+      }
+    };
+    chrome.windows.onCreated.addListener(listener);
+  });
+}
+
+// ─── iframe Tools ────────────────────────────────────────────
+
+// List all iframes on the current page with their frame IDs
+async function toolListIframes(params) {
+  const tab = await getActiveTab();
+  const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+  if (!frames) return { error: "Could not retrieve frames for this tab" };
+
+  // Frame 0 is the main frame; the rest are sub-frames (iframes)
+  const iframes = frames.filter((f) => f.frameId !== 0);
+
+  // Also get DOM-level info about each iframe
+  const domInfo = await executeInTab(
+    tab.id,
+    () => {
+      const iframes = document.querySelectorAll("iframe");
+      return Array.from(iframes).map((iframe, index) => ({
+        index,
+        src: iframe.src || "",
+        id: iframe.id || undefined,
+        name: iframe.name || undefined,
+        title: iframe.title || undefined,
+        width: iframe.offsetWidth,
+        height: iframe.offsetHeight,
+        visible: iframe.offsetParent !== null,
+        sandbox: iframe.getAttribute("sandbox") || undefined,
+      }));
+    },
+    [],
+  );
+
+  return {
+    mainFrameUrl: tab.url,
+    iframeCount: iframes.length,
+    iframes: iframes.map((f, i) => ({
+      frameId: f.frameId,
+      parentFrameId: f.parentFrameId,
+      url: f.url,
+      ...(domInfo && domInfo[i] ? domInfo[i] : {}),
+    })),
+  };
+}
+
+// Execute an action inside a specific iframe
+async function toolIframeInteract(params) {
+  const tab = await getActiveTab();
+  const { frameId, action, selector, text, value, fields, clearFirst } = params;
+
+  if (frameId === undefined && !params.iframeSelector) {
+    return { error: "Provide frameId (from list_iframes) or iframeSelector" };
+  }
+
+  let targetFrameId = frameId;
+
+  // If iframeSelector is provided instead of frameId, resolve it
+  if (targetFrameId === undefined && params.iframeSelector) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+    const iframeSrc = await executeInTab(
+      tab.id,
+      (sel) => {
+        const iframe = document.querySelector(sel);
+        return iframe ? iframe.src : null;
+      },
+      [params.iframeSelector],
+    );
+    if (!iframeSrc)
+      return {
+        error: `iframe not found with selector: ${params.iframeSelector}`,
+      };
+    const match = frames.find((f) => f.url === iframeSrc && f.frameId !== 0);
+    if (!match)
+      return { error: `Could not resolve frameId for iframe: ${iframeSrc}` };
+    targetFrameId = match.frameId;
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [targetFrameId] },
+      world: "MAIN",
+      func: (action, selector, text, value, fields, clearFirst) => {
+        // click
+        if (action === "click") {
+          let el;
+          if (selector) {
+            el = document.querySelector(selector);
+          } else if (text) {
+            const walker = document.createTreeWalker(
+              document.body,
+              NodeFilter.SHOW_TEXT,
+            );
+            while (walker.nextNode()) {
+              if (walker.currentNode.textContent.trim().includes(text)) {
+                el = walker.currentNode.parentElement;
+                break;
+              }
+            }
+          }
+          if (!el)
+            return { error: `Element not found in iframe: ${selector || text}` };
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.dispatchEvent(
+            new MouseEvent("click", {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+            }),
+          );
+          el.click();
+          return {
+            success: true,
+            tag: el.tagName,
+            text: el.textContent?.substring(0, 100),
+          };
+        }
+
+        // type
+        if (action === "type") {
+          const el = document.querySelector(selector);
+          if (!el)
+            return { error: `Element not found in iframe: ${selector}` };
+          el.focus();
+          if (clearFirst) {
+            el.value = "";
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          const nativeSetter =
+            Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype,
+              "value",
+            )?.set ||
+            Object.getOwnPropertyDescriptor(
+              window.HTMLTextAreaElement.prototype,
+              "value",
+            )?.set;
+          const newVal = (clearFirst ? "" : el.value || "") + value;
+          if (nativeSetter) {
+            nativeSetter.call(el, newVal);
+          } else {
+            el.value = newVal;
+          }
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          return { success: true, value: el.value };
+        }
+
+        // query — find elements
+        if (action === "query") {
+          const els = document.querySelectorAll(selector);
+          const limit = 20;
+          const items = [];
+          for (let i = 0; i < Math.min(limit, els.length); i++) {
+            const el = els[i];
+            items.push({
+              tag: el.tagName.toLowerCase(),
+              text: el.textContent?.trim().substring(0, 200),
+              id: el.id || undefined,
+              className: el.className || undefined,
+              href: el.getAttribute("href") || undefined,
+              value: el.value || undefined,
+              visible: el.offsetParent !== null,
+            });
+          }
+          return { count: els.length, items };
+        }
+
+        // extract_text
+        if (action === "extract_text") {
+          if (selector) {
+            const el = document.querySelector(selector);
+            if (!el)
+              return { error: `Element not found in iframe: ${selector}` };
+            return { text: el.innerText };
+          }
+          return { text: document.body.innerText };
+        }
+
+        // fill_form
+        if (action === "fill_form" && fields) {
+          const results = [];
+          for (const field of fields) {
+            const el = document.querySelector(field.selector);
+            if (!el) {
+              results.push({ selector: field.selector, error: "Not found" });
+              continue;
+            }
+            el.focus();
+            if (el.tagName === "SELECT") {
+              el.value = field.value;
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            } else {
+              el.value = field.value;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            results.push({ selector: field.selector, success: true });
+          }
+          return { success: true, results };
+        }
+
+        // get_dom_state inside iframe
+        if (action === "get_dom_state") {
+          const INTERACTIVE = [
+            "a[href]",
+            "button",
+            'input:not([type="hidden"])',
+            "textarea",
+            "select",
+            '[role="button"]',
+            '[role="link"]',
+            '[role="tab"]',
+            '[role="menuitem"]',
+            "[onclick]",
+            "[tabindex]",
+            "[contenteditable]",
+          ];
+          const seen = new Set();
+          const elements = [];
+          const allEls = document.querySelectorAll(INTERACTIVE.join(","));
+          for (const el of allEls) {
+            if (seen.has(el)) continue;
+            seen.add(el);
+            const style = window.getComputedStyle(el);
+            if (
+              style.display === "none" ||
+              style.visibility === "hidden" ||
+              style.opacity === "0"
+            )
+              continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) continue;
+            if (el.closest("script, style, noscript")) continue;
+            const tag = el.tagName.toLowerCase();
+            const entry = { tag };
+            const t = (el.textContent || "").trim().substring(0, 80);
+            if (t) entry.text = t;
+            if (el.getAttribute("type")) entry.type = el.getAttribute("type");
+            if (el.getAttribute("name")) entry.name = el.getAttribute("name");
+            if (el.getAttribute("placeholder"))
+              entry.placeholder = el.getAttribute("placeholder");
+            if (el.getAttribute("href"))
+              entry.href = el.getAttribute("href").substring(0, 120);
+            if (el.id) entry.id = el.id;
+            if (el.value && tag !== "a")
+              entry.value = String(el.value).substring(0, 80);
+            elements.push(entry);
+            if (elements.length >= 200) break;
+          }
+          const indexed = {};
+          for (let i = 0; i < elements.length; i++) indexed[i] = elements[i];
+          return {
+            title: document.title,
+            url: location.href,
+            elementCount: elements.length,
+            elements: indexed,
+          };
+        }
+
+        return { error: `Unknown iframe action: ${action}` };
+      },
+      args: [action, selector, text, value, fields, clearFirst || false],
+    });
+
+    if (results && results[0]) {
+      if (results[0].error) {
+        throw new Error(
+          results[0].error.message || "Script execution error in iframe",
+        );
+      }
+      return { ...results[0].result, frameId: targetFrameId };
+    }
+    return { error: "No result from iframe script execution" };
+  } catch (err) {
+    return { error: `iframe interaction failed: ${err.message}` };
+  }
+}
+
+// ─── Shadow DOM Tools ────────────────────────────────────────
+
+// List all elements that host an open shadow root
+async function toolListShadowRoots(params) {
+  const tab = await getActiveTab();
+  return await executeInTab(
+    tab.id,
+    (maxDepth) => {
+      const results = [];
+      function findShadowHosts(root, path = "", depth = 0) {
+        if (depth > maxDepth) return;
+        const all = root.querySelectorAll("*");
+        for (const el of all) {
+          if (el.shadowRoot) {
+            const hostInfo = {
+              tag: el.tagName.toLowerCase(),
+              id: el.id || undefined,
+              className:
+                typeof el.className === "string"
+                  ? el.className.substring(0, 100)
+                  : undefined,
+              path: path || "document",
+              childElementCount: el.shadowRoot.children.length,
+              innerElementCount: el.shadowRoot.querySelectorAll("*").length,
+              // Build a selector to reach this host
+              selector: el.id
+                ? `#${CSS.escape(el.id)}`
+                : el.tagName.toLowerCase() +
+                  (el.className
+                    ? "." +
+                      el.className
+                        .toString()
+                        .split(" ")
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .join(".")
+                    : ""),
+            };
+            results.push(hostInfo);
+            // Recurse into nested shadow roots
+            findShadowHosts(
+              el.shadowRoot,
+              (path ? path + " >>> " : "") + hostInfo.selector,
+              depth + 1,
+            );
+          }
+        }
+      }
+      findShadowHosts(document, "", 0);
+      return { shadowRootCount: results.length, hosts: results };
+    },
+    [params?.maxDepth || 5],
+  );
+}
+
+// Interact with elements inside shadow DOMs using piercing selector
+// Piercing syntax: "host-selector >>> inner-selector" or nested "host1 >>> host2 >>> target"
+async function toolShadowInteract(params) {
+  const tab = await getActiveTab();
+  const { piercingSelector, action, value, clearFirst, fields } = params;
+
+  if (!piercingSelector) {
+    return { error: "piercingSelector is required (e.g. 'my-component >>> .inner-button')" };
+  }
+
+  return await executeInTab(
+    tab.id,
+    (piercingSelector, action, value, clearFirst, fields) => {
+      // Parse piercing selector: split on " >>> "
+      const parts = piercingSelector.split(" >>> ").map((s) => s.trim());
+      if (parts.length < 2) {
+        return {
+          error:
+            "piercingSelector must contain at least one ' >>> ' separator (e.g. 'host >>> target')",
+        };
+      }
+
+      // Traverse through shadow boundaries
+      let currentRoot = document;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const host = currentRoot.querySelector(parts[i]);
+        if (!host) {
+          return {
+            error: `Shadow host not found: "${parts[i]}" at depth ${i}`,
+          };
+        }
+        if (!host.shadowRoot) {
+          return {
+            error: `Element "${parts[i]}" does not have a shadow root (it may be closed)`,
+          };
+        }
+        currentRoot = host.shadowRoot;
+      }
+
+      // Now find the target element in the deepest shadow root
+      const targetSelector = parts[parts.length - 1];
+      const el = currentRoot.querySelector(targetSelector);
+
+      if (!el) {
+        return {
+          error: `Target element not found: "${targetSelector}" inside shadow root`,
+        };
+      }
+
+      // Default action is "query" (just return info about the element)
+      if (!action || action === "query") {
+        return {
+          success: true,
+          tag: el.tagName.toLowerCase(),
+          text: (el.textContent || "").trim().substring(0, 200),
+          id: el.id || undefined,
+          className: el.className || undefined,
+          visible: el.offsetParent !== null,
+          value: el.value || undefined,
+        };
+      }
+
+      if (action === "click") {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.dispatchEvent(
+          new MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            view: window,
+          }),
+        );
+        el.click();
+        return {
+          success: true,
+          tag: el.tagName.toLowerCase(),
+          text: (el.textContent || "").trim().substring(0, 100),
+        };
+      }
+
+      if (action === "type") {
+        el.focus();
+        if (clearFirst) {
+          el.value = "";
+          el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        }
+        const nativeSetter =
+          Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype,
+            "value",
+          )?.set ||
+          Object.getOwnPropertyDescriptor(
+            window.HTMLTextAreaElement.prototype,
+            "value",
+          )?.set;
+        const newVal = (clearFirst ? "" : el.value || "") + value;
+        if (nativeSetter) {
+          nativeSetter.call(el, newVal);
+        } else {
+          el.value = newVal;
+        }
+        el.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        return { success: true, value: el.value };
+      }
+
+      if (action === "extract_text") {
+        return { success: true, text: el.innerText };
+      }
+
+      if (action === "query_all") {
+        const els = currentRoot.querySelectorAll(targetSelector);
+        const items = [];
+        for (let i = 0; i < Math.min(20, els.length); i++) {
+          items.push({
+            tag: els[i].tagName.toLowerCase(),
+            text: (els[i].textContent || "").trim().substring(0, 200),
+            id: els[i].id || undefined,
+            visible: els[i].offsetParent !== null,
+            value: els[i].value || undefined,
+          });
+        }
+        return { success: true, count: els.length, items };
+      }
+
+      if (action === "fill_form" && fields) {
+        const results = [];
+        for (const field of fields) {
+          const fieldEl = currentRoot.querySelector(field.selector);
+          if (!fieldEl) {
+            results.push({ selector: field.selector, error: "Not found" });
+            continue;
+          }
+          fieldEl.focus();
+          if (fieldEl.tagName === "SELECT") {
+            fieldEl.value = field.value;
+            fieldEl.dispatchEvent(
+              new Event("change", { bubbles: true, composed: true }),
+            );
+          } else {
+            fieldEl.value = field.value;
+            fieldEl.dispatchEvent(
+              new Event("input", { bubbles: true, composed: true }),
+            );
+            fieldEl.dispatchEvent(
+              new Event("change", { bubbles: true, composed: true }),
+            );
+          }
+          results.push({ selector: field.selector, success: true });
+        }
+        return { success: true, results };
+      }
+
+      if (action === "get_dom_state") {
+        const INTERACTIVE = [
+          "a[href]",
+          "button",
+          'input:not([type="hidden"])',
+          "textarea",
+          "select",
+          '[role="button"]',
+          '[role="link"]',
+          "[onclick]",
+          "[tabindex]",
+          "[contenteditable]",
+        ];
+        const seen = new Set();
+        const elements = [];
+        const allEls = currentRoot.querySelectorAll(INTERACTIVE.join(","));
+        for (const el of allEls) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const style = window.getComputedStyle(el);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.opacity === "0"
+          )
+            continue;
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue;
+          const tag = el.tagName.toLowerCase();
+          const entry = { tag };
+          const t = (el.textContent || "").trim().substring(0, 80);
+          if (t) entry.text = t;
+          if (el.getAttribute("type")) entry.type = el.getAttribute("type");
+          if (el.getAttribute("name")) entry.name = el.getAttribute("name");
+          if (el.getAttribute("placeholder"))
+            entry.placeholder = el.getAttribute("placeholder");
+          if (el.id) entry.id = el.id;
+          if (el.value && tag !== "a")
+            entry.value = String(el.value).substring(0, 80);
+          elements.push(entry);
+          if (elements.length >= 200) break;
+        }
+        const indexed = {};
+        for (let i = 0; i < elements.length; i++) indexed[i] = elements[i];
+        return { elementCount: elements.length, elements: indexed };
+      }
+
+      return { error: `Unknown shadow action: ${action}` };
+    },
+    [piercingSelector, action || "query", value, clearFirst || false, fields],
+  );
+}
+
+// Deep query: search across main DOM, all iframes, and all shadow DOMs
+async function toolDeepQuery(params) {
+  const tab = await getActiveTab();
+  const { selector, text, limit } = params;
+  const maxItems = limit || 30;
+
+  // 1. Search main document (including shadow DOMs)
+  const mainResults = await executeInTab(
+    tab.id,
+    (selector, text, maxItems) => {
+      const results = [];
+
+      function searchInRoot(root, context) {
+        if (selector) {
+          const els = root.querySelectorAll(selector);
+          for (let i = 0; i < Math.min(els.length, maxItems - results.length); i++) {
+            results.push({
+              context,
+              tag: els[i].tagName.toLowerCase(),
+              text: (els[i].textContent || "").trim().substring(0, 200),
+              id: els[i].id || undefined,
+              visible: els[i].offsetParent !== null,
+              value: els[i].value || undefined,
+            });
+          }
+        }
+        if (text) {
+          const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+          );
+          while (walker.nextNode() && results.length < maxItems) {
+            if (walker.currentNode.textContent.trim().includes(text)) {
+              const parent = walker.currentNode.parentElement;
+              if (parent) {
+                results.push({
+                  context,
+                  tag: parent.tagName.toLowerCase(),
+                  text: walker.currentNode.textContent.trim().substring(0, 200),
+                  id: parent.id || undefined,
+                  visible: parent.offsetParent !== null,
+                });
+              }
+            }
+          }
+        }
+        // Recurse into shadow roots
+        if (results.length < maxItems) {
+          const all = root.querySelectorAll("*");
+          for (const el of all) {
+            if (el.shadowRoot && results.length < maxItems) {
+              const hostDesc =
+                el.tagName.toLowerCase() + (el.id ? `#${el.id}` : "");
+              searchInRoot(
+                el.shadowRoot,
+                context + " >>> " + hostDesc,
+              );
+            }
+          }
+        }
+      }
+
+      searchInRoot(document, "main");
+      return results;
+    },
+    [selector, text, maxItems],
+  );
+
+  // 2. Search inside iframes
+  let iframeResults = [];
+  try {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+    const iframes = (frames || []).filter((f) => f.frameId !== 0);
+
+    for (const frame of iframes) {
+      if (iframeResults.length + (mainResults || []).length >= maxItems) break;
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, frameIds: [frame.frameId] },
+          world: "MAIN",
+          func: (selector, text, maxItems) => {
+            const results = [];
+            if (selector) {
+              const els = document.querySelectorAll(selector);
+              for (
+                let i = 0;
+                i < Math.min(els.length, maxItems);
+                i++
+              ) {
+                results.push({
+                  tag: els[i].tagName.toLowerCase(),
+                  text: (els[i].textContent || "").trim().substring(0, 200),
+                  id: els[i].id || undefined,
+                  visible: els[i].offsetParent !== null,
+                  value: els[i].value || undefined,
+                });
+              }
+            }
+            if (text) {
+              const walker = document.createTreeWalker(
+                document.body,
+                NodeFilter.SHOW_TEXT,
+              );
+              while (walker.nextNode() && results.length < maxItems) {
+                if (walker.currentNode.textContent.trim().includes(text)) {
+                  const parent = walker.currentNode.parentElement;
+                  if (parent) {
+                    results.push({
+                      tag: parent.tagName.toLowerCase(),
+                      text: walker.currentNode.textContent
+                        .trim()
+                        .substring(0, 200),
+                      id: parent.id || undefined,
+                      visible: parent.offsetParent !== null,
+                    });
+                  }
+                }
+              }
+            }
+            return results;
+          },
+          args: [
+            selector,
+            text,
+            maxItems - (mainResults || []).length - iframeResults.length,
+          ],
+        });
+        if (results && results[0] && results[0].result) {
+          for (const item of results[0].result) {
+            iframeResults.push({
+              ...item,
+              context: `iframe[frameId=${frame.frameId}](${frame.url?.substring(0, 80)})`,
+            });
+          }
+        }
+      } catch {
+        // Some frames may not be accessible (cross-origin without permissions)
+      }
+    }
+  } catch {
+    // webNavigation may fail on restricted pages
+  }
+
+  const allResults = [...(mainResults || []), ...iframeResults];
+  return {
+    totalFound: allResults.length,
+    results: allResults.slice(0, maxItems),
+  };
 }

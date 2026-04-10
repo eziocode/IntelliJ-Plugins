@@ -67,6 +67,28 @@ if (_wireLog) {
   };
 }
 
+// ─── Tool Error Logger ───────────────────────────────────────
+// Captures tool errors to a file and in-memory ring buffer.
+// View from the extension popup via the Logs tab.
+const TOOL_ERROR_LOG_PATH = "/tmp/autodom-tool-errors.log";
+const TOOL_ERROR_LOG_MAX = 200;
+const _toolErrorBuf = [];
+
+function _logToolError(tool, error, params) {
+  const entry = {
+    ts: new Date().toISOString(),
+    tool,
+    error: typeof error === "string" ? error : (error?.message || String(error)),
+    params: params ? JSON.stringify(params).slice(0, 300) : undefined,
+  };
+  if (_toolErrorBuf.length >= TOOL_ERROR_LOG_MAX) _toolErrorBuf.shift();
+  _toolErrorBuf.push(entry);
+  const line = `[${entry.ts}] [${tool}] ${entry.error}${entry.params ? " | params=" + entry.params : ""}\n`;
+  import("fs").then(({ promises: fsp }) =>
+    fsp.appendFile(TOOL_ERROR_LOG_PATH, line).catch(() => {}),
+  );
+}
+
 // ─── Crash Protection ────────────────────────────────────────
 // Prevent the server from dying on unhandled errors — the IDE
 // expects this process to stay alive for the entire session.
@@ -1599,6 +1621,19 @@ function _processWsMessage(socket, message) {
     }
     return;
   }
+
+  if (message.type === "GET_TOOL_LOGS") {
+    try {
+      socket.send(
+        JSON.stringify({
+          type: "TOOL_LOGS_RESPONSE",
+          logs: _toolErrorBuf.slice(),
+          logFile: TOOL_ERROR_LOG_PATH,
+        }),
+      );
+    } catch (_) {}
+    return;
+  }
 }
 
 process.on("exit", removeLockFileIfOwnedSync);
@@ -1620,6 +1655,7 @@ function callExtensionTool(tool, params) {
       diagLog(
         `toolCall END tool=${tool} elapsed=${elapsed}ms hasError=${hasError}`,
       );
+      if (hasError) _logToolError(tool, result.error, params);
       const logEntry = {
         tool,
         elapsed,
@@ -2179,7 +2215,7 @@ server.addTool({
     "Click an interactive element by its numeric index from get_dom_state. " +
     "More reliable than CSS selectors — indices are stable within a page state.",
   parameters: z.object({
-    index: z.number().describe("Element index from get_dom_state"),
+    index: z.coerce.number().describe("Element index from get_dom_state"),
     dblClick: z
       .boolean()
       .optional()
@@ -2199,7 +2235,7 @@ server.addTool({
     "Type text into an input element by its numeric index from get_dom_state. " +
     "More reliable than CSS selectors — indices are stable within a page state.",
   parameters: z.object({
-    index: z.number().describe("Element index from get_dom_state"),
+    index: z.coerce.number().describe("Element index from get_dom_state"),
     text: z.string().describe("Text to type"),
     clearFirst: z
       .boolean()
@@ -2643,7 +2679,7 @@ server.addTool({
   parameters: z.object({
     text: z.string().describe("Text to wait for"),
     timeout: z
-      .number()
+      .coerce.number()
       .optional()
       .default(10000)
       .describe("Max wait time in milliseconds"),
@@ -2799,7 +2835,7 @@ server.addTool({
       .optional()
       .default("down")
       .describe("Scroll direction"),
-    amount: z.number().optional().default(500).describe("Pixels to scroll"),
+    amount: z.coerce.number().optional().default(500).describe("Pixels to scroll"),
     selector: z
       .string()
       .optional()
@@ -2846,7 +2882,7 @@ server.addTool({
       .default("visible")
       .describe("Desired state"),
     timeout: z
-      .number()
+      .coerce.number()
       .optional()
       .default(10000)
       .describe("Max wait time in ms"),
@@ -2864,7 +2900,7 @@ server.addTool({
     "Wait for the current page to finish loading (status=complete). Use after triggering navigation.",
   parameters: z.object({
     timeout: z
-      .number()
+      .coerce.number()
       .optional()
       .default(15000)
       .describe("Max wait time in ms"),
@@ -3124,12 +3160,12 @@ server.addTool({
     "Wait until network activity settles (no new requests). Useful for SPAs and dynamic pages.",
   parameters: z.object({
     timeout: z
-      .number()
+      .coerce.number()
       .optional()
       .default(10000)
       .describe("Max wait time in ms"),
     idleTime: z
-      .number()
+      .coerce.number()
       .optional()
       .default(500)
       .describe("How long network must be idle in ms"),
@@ -3398,6 +3434,250 @@ server.addTool({
       originalText: pending.text,
       responseSent: true,
     });
+  },
+});
+
+// ─── Popup / Window Tools ────────────────────────────────────
+
+server.addTool({
+  name: "list_popups",
+  description:
+    "List all browser windows including popup windows opened via window.open(). " +
+    "Returns window type (normal, popup), dimensions, and tabs in each window. " +
+    "Use this to discover popup windows that were opened by page interactions.",
+  parameters: z.object({
+    popupsOnly: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, only return popup-type windows"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("list_popups", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+server.addTool({
+  name: "switch_to_popup",
+  description:
+    "Switch focus to a specific browser popup/window by its windowId. " +
+    "After switching, subsequent tools (click, type, screenshot, etc.) will operate " +
+    "on the active tab in that window. Use list_popups first to find windowId values.",
+  parameters: z.object({
+    windowId: z.number().describe("Window ID from list_popups"),
+    tabId: z
+      .number()
+      .optional()
+      .describe("Specific tab ID to activate within the window"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("switch_to_popup", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+server.addTool({
+  name: "close_popup",
+  description:
+    "Close a browser popup/window by its windowId. " +
+    "Use list_popups to find the windowId of the popup you want to close.",
+  parameters: z.object({
+    windowId: z.number().describe("Window ID of the popup/window to close"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("close_popup", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+server.addTool({
+  name: "wait_for_popup",
+  description:
+    "Wait for a new browser popup/window to open (e.g. after clicking a link that " +
+    "triggers window.open()). Returns details of the new window when it appears. " +
+    "Call this BEFORE performing the action that opens the popup.",
+  parameters: z.object({
+    timeout: z
+      .number()
+      .optional()
+      .default(10000)
+      .describe("Max time to wait in milliseconds"),
+    switchTo: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe("Automatically switch focus to the new popup"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("wait_for_popup", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+// ─── iframe Tools ────────────────────────────────────────────
+
+server.addTool({
+  name: "list_iframes",
+  description:
+    "List all iframes on the current page with their frame IDs, URLs, dimensions, and DOM attributes. " +
+    "Use the returned frameId values with iframe_interact to interact with elements inside iframes. " +
+    "This is essential for pages that embed content in iframes (payment forms, ads, embedded widgets, etc.).",
+  parameters: z.object({}),
+  execute: async (params) => {
+    const result = await callExtensionTool("list_iframes", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+server.addTool({
+  name: "iframe_interact",
+  description:
+    "Interact with elements inside a specific iframe. Supports click, type, query, extract_text, " +
+    "fill_form, and get_dom_state actions inside the iframe. Use list_iframes first to get the " +
+    "frameId, or provide an iframeSelector (CSS selector for the iframe element in the parent page). " +
+    "This is required for any interaction with elements inside iframes — regular click/type/query " +
+    "tools cannot reach inside iframe boundaries.",
+  parameters: z.object({
+    frameId: z
+      .number()
+      .optional()
+      .describe("Frame ID from list_iframes (preferred)"),
+    iframeSelector: z
+      .string()
+      .optional()
+      .describe(
+        "CSS selector for the iframe element in the parent page (alternative to frameId)",
+      ),
+    action: z
+      .enum(["click", "type", "query", "extract_text", "fill_form", "get_dom_state"])
+      .describe("Action to perform inside the iframe"),
+    selector: z
+      .string()
+      .optional()
+      .describe("CSS selector for the target element inside the iframe"),
+    text: z
+      .string()
+      .optional()
+      .describe("Text to search for (click action) or text to type (type action)"),
+    value: z
+      .string()
+      .optional()
+      .describe("Value to type (for type action)"),
+    fields: z
+      .array(
+        z.object({
+          selector: z.string(),
+          value: z.string(),
+        }),
+      )
+      .optional()
+      .describe("Fields to fill (for fill_form action)"),
+    clearFirst: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("Clear the field before typing"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("iframe_interact", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+// ─── Shadow DOM Tools ────────────────────────────────────────
+
+server.addTool({
+  name: "list_shadow_roots",
+  description:
+    "List all elements on the page that host an open shadow DOM. Returns each host element's " +
+    "tag, id, class, a CSS selector to reach it, and the count of elements inside the shadow root. " +
+    "Use the returned selectors with shadow_interact to interact with elements inside shadow DOMs. " +
+    "Web components (custom elements) typically use shadow DOM to encapsulate their internal structure.",
+  parameters: z.object({
+    maxDepth: z
+      .number()
+      .optional()
+      .default(5)
+      .describe("Maximum nesting depth to search for shadow roots"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("list_shadow_roots", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+server.addTool({
+  name: "shadow_interact",
+  description:
+    "Interact with elements inside shadow DOMs using a piercing selector syntax. " +
+    "Use ' >>> ' to pierce through shadow boundaries: 'host-selector >>> inner-selector'. " +
+    "For nested shadow DOMs: 'outer-host >>> inner-host >>> target'. " +
+    "Supports actions: click, type, query (single element), query_all (multiple), " +
+    "extract_text, fill_form, and get_dom_state. " +
+    "Use list_shadow_roots first to discover shadow DOM hosts and their selectors.",
+  parameters: z.object({
+    piercingSelector: z
+      .string()
+      .describe(
+        "Piercing selector using ' >>> ' to cross shadow boundaries. " +
+          "Example: 'my-component >>> .inner-button' or '#app >>> settings-panel >>> input[name=email]'",
+      ),
+    action: z
+      .enum(["click", "type", "query", "query_all", "extract_text", "fill_form", "get_dom_state"])
+      .optional()
+      .default("query")
+      .describe("Action to perform on the target element"),
+    value: z
+      .string()
+      .optional()
+      .describe("Value to type (for type action)"),
+    clearFirst: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("Clear the field before typing"),
+    fields: z
+      .array(
+        z.object({
+          selector: z.string(),
+          value: z.string(),
+        }),
+      )
+      .optional()
+      .describe("Fields to fill (for fill_form action)"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("shadow_interact", params);
+    return JSON.stringify(result, null, 2);
+  },
+});
+
+server.addTool({
+  name: "deep_query",
+  description:
+    "Search for elements across the entire page including inside all iframes and shadow DOMs. " +
+    "This is a universal search tool — use it when you're not sure where an element is " +
+    "(main page, iframe, or shadow DOM). Returns each match with its context " +
+    "(main, iframe[frameId=N], or shadow path). Use CSS selector and/or text search.",
+  parameters: z.object({
+    selector: z
+      .string()
+      .optional()
+      .describe("CSS selector to search for"),
+    text: z
+      .string()
+      .optional()
+      .describe("Text content to search for"),
+    limit: z
+      .number()
+      .optional()
+      .default(30)
+      .describe("Maximum number of results"),
+  }),
+  execute: async (params) => {
+    const result = await callExtensionTool("deep_query", params);
+    return JSON.stringify(result, null, 2);
   },
 });
 

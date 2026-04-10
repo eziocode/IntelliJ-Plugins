@@ -41,7 +41,13 @@ let isRunning = false;
 let isConnected = false;
 const ACTIVITY_LOG_KEY = "autodomActivityLogs";
 const ACTIVITY_FILTER_KEY = "autodomActivityLogFilter";
-const activityStorage = chrome.storage.session || chrome.storage.local;
+const activityStorage = (() => {
+  try {
+    return chrome.storage.session || chrome.storage.local;
+  } catch (_) {
+    return chrome.storage.local;
+  }
+})();
 let providerSettings = {
   source: "ide",
   apiKey: "",
@@ -333,7 +339,8 @@ function generateConfigs(port, detectedPath) {
   const isDetected = !!detectedPath;
   const serverPath = detectedPath || "autodom-extension/server/index.js";
 
-  const portArg = port !== 9876 ? `\n        "--port", "${port}"` : "";
+  const portArgs = port !== 9876 ? `, "--port", "${port}"` : "";
+  const tomlPortArgs = port !== 9876 ? `, "--port", "${port}"` : "";
 
   $("#configPort").textContent = port;
 
@@ -342,45 +349,23 @@ function generateConfigs(port, detectedPath) {
     : `${serverPath}  (connect to auto-detect full path)`;
   $("#serverPath").style.color = isDetected ? "#22c55e" : "#f59e0b";
 
-  // VS Code / Cursor
-  $("#vscodeConfig").textContent = `{
+  // Unified JSON config (VS Code, IntelliJ, Gemini CLI, Claude Desktop)
+  $("#mcpConfig").textContent = `{
   "mcpServers": {
     "autodom": {
       "command": "node",
-      "args": ["${serverPath}"${portArg ? `,${portArg}` : ""}]
+      "args": ["${serverPath}"${portArgs}]
     }
   }
 }`;
 
-  // IntelliJ / JetBrains
-  $("#intellijConfig").textContent = `{
-  "mcpServers": {
-    "autodom": {
-      "command": "node",
-      "args": ["${serverPath}"${portArg ? `,${portArg}` : ""}]
-    }
-  }
-}`;
-
-  // Gemini CLI
-  $("#geminiConfig").textContent = `{
-  "mcpServers": {
-    "autodom": {
-      "command": "node",
-      "args": ["${serverPath}"${portArg ? `,${portArg}` : ""}]
-    }
-  }
-}`;
-
-  // Claude Desktop
-  $("#claudeConfig").textContent = `{
-  "mcpServers": {
-    "autodom": {
-      "command": "node",
-      "args": ["${serverPath}"${portArg ? `,${portArg}` : ""}]
-    }
-  }
-}`;
+  // TOML config (Codex)
+  const tomlArgs = port !== 9876
+    ? `["${serverPath}", "--port", "${port}"]`
+    : `["${serverPath}"]`;
+  $("#tomlConfig").textContent = `[mcp_servers.autodom]
+command = "node"
+args = ${tomlArgs}`;
 }
 
 // ─── Event Listeners ─────────────────────────────────────────
@@ -814,3 +799,97 @@ function filterActivityLogs(entries, filter) {
 
   return entries.filter((item) => (item?.level || "info") === filter);
 }
+
+// ─── Tool Error Logs Tab ─────────────────────────────────────
+
+let _toolLogs = { extensionLogs: [], serverLogs: [], logFile: null };
+
+function renderToolLogs() {
+  const container = $("#toolLogContainer");
+  if (!container) return;
+
+  const sourceFilter = $("#logSourceFilter")?.value || "all";
+  let entries = [];
+
+  if (sourceFilter !== "server") {
+    (_toolLogs.extensionLogs || []).forEach((e) =>
+      entries.push({ ...e, source: "extension" }),
+    );
+  }
+  if (sourceFilter !== "extension") {
+    (_toolLogs.serverLogs || []).forEach((e) =>
+      entries.push({ ...e, source: "server" }),
+    );
+  }
+
+  entries.sort((a, b) => (a.ts > b.ts ? 1 : -1));
+
+  if (entries.length === 0) {
+    container.innerHTML =
+      '<div class="log-entry log-info">No tool errors recorded.</div>';
+    return;
+  }
+
+  container.innerHTML = entries
+    .map((e) => {
+      const time = e.ts ? e.ts.slice(11, 19) : "";
+      const badge = e.source === "server" ? "[server]" : "[ext]";
+      return `<div class="log-entry log-error"><span class="log-time">${escapeHtml(time)}</span> <span class="log-badge">${badge}</span> <strong>${escapeHtml(e.tool || "?")}</strong>: ${escapeHtml(e.error || "")}${e.extra ? " · " + escapeHtml(String(e.extra)) : ""}</div>`;
+    })
+    .join("");
+
+  container.scrollTop = container.scrollHeight;
+}
+
+async function fetchToolLogs() {
+  const btn = $("#fetchLogsBtn");
+  if (btn) btn.textContent = "Loading…";
+
+  try {
+    const response = await sendRuntimeMessage({ type: "GET_TOOL_LOGS" });
+    if (response) {
+      _toolLogs = {
+        extensionLogs: response.extensionLogs || [],
+        serverLogs: response.serverLogs || [],
+        logFile: response.logFile || null,
+      };
+    }
+  } catch (e) {
+    _toolLogs = { extensionLogs: [], serverLogs: [], logFile: null };
+  }
+
+  const hint = $("#logFilePath");
+  if (hint) {
+    hint.textContent = _toolLogs.logFile
+      ? `Server log file: ${_toolLogs.logFile}`
+      : "";
+  }
+
+  renderToolLogs();
+  if (btn) btn.textContent = "Refresh";
+}
+
+function initToolLogsTab() {
+  const fetchBtn = $("#fetchLogsBtn");
+  if (fetchBtn) fetchBtn.addEventListener("click", fetchToolLogs);
+
+  const clearBtn = $("#clearToolLogsBtn");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      _toolLogs = { extensionLogs: [], serverLogs: [], logFile: _toolLogs.logFile };
+      renderToolLogs();
+    });
+  }
+
+  const sourceFilter = $("#logSourceFilter");
+  if (sourceFilter) sourceFilter.addEventListener("change", renderToolLogs);
+
+  // Auto-load when tab becomes active
+  $$(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      if (tab.dataset.tab === "logs") fetchToolLogs();
+    });
+  });
+}
+
+initToolLogsTab();

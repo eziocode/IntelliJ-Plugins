@@ -235,13 +235,14 @@ body {
     justify-content: space-between;
     gap: 8px;
     margin-bottom: 8px;
+    min-width: 0;
 }
 
 .log-toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    min-width: 0;
+    gap: 6px;
+    flex-shrink: 0;
 }
 
 .section-label {
@@ -250,6 +251,8 @@ body {
     color: var(--text-secondary);
     letter-spacing: 0.04em;
     text-transform: uppercase;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 /* ─── Status Card ───────────────────────── */
@@ -381,10 +384,10 @@ select.config-input {
 }
 
 .log-filter.config-input {
-    width: auto;
-    min-width: 118px;
+    width: 80px;
+    min-width: 0;
     min-height: 28px;
-    padding: 5px 8px;
+    padding: 5px 6px;
     font-size: 11.5px;
 }
 
@@ -565,6 +568,48 @@ select.config-input {
 .copy-btn.copied {
     color: var(--success);
     border-color: var(--success);
+}
+
+/* ─── Config Destinations Table ────────── */
+
+.config-destinations {
+    margin: 2px 0 4px;
+}
+
+.dest-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+    margin-top: 6px;
+}
+
+.dest-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+.dest-table tr:last-child td {
+    border-bottom: none;
+}
+
+.dest-ide {
+    color: var(--text-secondary);
+    font-weight: 500;
+    width: 44%;
+}
+
+.dest-file {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--text-muted);
+}
+
+.dest-note {
+    font-family: inherit;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.7;
 }
 
 /* ─── Activity Log ─────────────────────── */

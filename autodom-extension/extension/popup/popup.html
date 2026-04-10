@@ -29,6 +29,7 @@
             <nav class="tab-bar">
                 <button class="tab active" data-tab="status">Status</button>
                 <button class="tab" data-tab="config">Config</button>
+                <button class="tab" data-tab="logs">Logs</button>
             </nav>
 
             <main class="app-main">
@@ -224,11 +225,11 @@
                                     class="config-input log-filter"
                                     aria-label="Filter activity logs"
                                 >
-                                    <option value="all">All logs</option>
+                                    <option value="all">All</option>
                                     <option value="error">Errors</option>
-                                    <option value="warn">Warnings</option>
+                                    <option value="warn">Warns</option>
                                     <option value="info">Info</option>
-                                    <option value="success">Success</option>
+                                    <option value="success">OK</option>
                                 </select>
                                 <button class="text-btn" id="logClear">
                                     Clear
@@ -249,121 +250,75 @@
                             <span class="section-label">Setup Config</span>
                         </div>
                         <div class="config-info">
-                            <p class="field-hint">
-                                Copy the config below into your IDE MCP
-                                settings.
-                            </p>
-
                             <div class="config-block">
                                 <div class="config-block-header">
-                                    <span class="config-block-label"
-                                        >Server Path</span
-                                    >
-                                    <button
-                                        class="copy-btn"
-                                        data-copy="serverPath"
-                                        title="Copy path"
-                                    >
-                                        Copy
-                                    </button>
+                                    <span class="config-block-label">Server Path</span>
+                                    <button class="copy-btn" data-copy="serverPath" title="Copy path">Copy</button>
                                 </div>
                                 <pre class="config-code" id="serverPath"></pre>
                             </div>
 
                             <div class="config-block">
                                 <div class="config-block-header">
-                                    <span class="config-block-label"
-                                        >VS Code / Cursor</span
-                                    >
-                                    <span class="config-block-file"
-                                        >.vscode/mcp.json</span
-                                    >
-                                    <button
-                                        class="copy-btn"
-                                        data-copy="vscodeConfig"
-                                        title="Copy config"
-                                    >
-                                        Copy
-                                    </button>
+                                    <span class="config-block-label">MCP Config</span>
+                                    <button class="copy-btn" data-copy="mcpConfig" title="Copy config">Copy</button>
                                 </div>
-                                <pre
-                                    class="config-code"
-                                    id="vscodeConfig"
-                                ></pre>
+                                <pre class="config-code" id="mcpConfig"></pre>
+                            </div>
+
+                            <div class="config-destinations">
+                                <p class="field-hint">Paste into your IDE config file:</p>
+                                <table class="dest-table">
+                                    <tbody>
+                                        <tr><td class="dest-ide">VS Code / Cursor</td><td class="dest-file">.vscode/mcp.json</td></tr>
+                                        <tr><td class="dest-ide">IntelliJ / JetBrains</td><td class="dest-file">.junie/mcp.json</td></tr>
+                                        <tr><td class="dest-ide">Gemini CLI</td><td class="dest-file">~/.gemini/settings.json</td></tr>
+                                        <tr><td class="dest-ide">Claude Desktop</td><td class="dest-file">claude_desktop_config.json</td></tr>
+                                        <tr><td class="dest-ide">Codex</td><td class="dest-file">~/.codex/config.toml <span class="dest-note">(use TOML format)</span></td></tr>
+                                    </tbody>
+                                </table>
                             </div>
 
                             <div class="config-block">
                                 <div class="config-block-header">
-                                    <span class="config-block-label"
-                                        >IntelliJ / JetBrains</span
-                                    >
-                                    <span class="config-block-file"
-                                        >.junie/mcp.json</span
-                                    >
-                                    <button
-                                        class="copy-btn"
-                                        data-copy="intellijConfig"
-                                        title="Copy config"
-                                    >
-                                        Copy
-                                    </button>
+                                    <span class="config-block-label">Codex / TOML</span>
+                                    <button class="copy-btn" data-copy="tomlConfig" title="Copy TOML config">Copy</button>
                                 </div>
-                                <pre
-                                    class="config-code"
-                                    id="intellijConfig"
-                                ></pre>
-                            </div>
-
-                            <div class="config-block">
-                                <div class="config-block-header">
-                                    <span class="config-block-label"
-                                        >Gemini CLI</span
-                                    >
-                                    <span class="config-block-file"
-                                        >~/.gemini/settings.json</span
-                                    >
-                                    <button
-                                        class="copy-btn"
-                                        data-copy="geminiConfig"
-                                        title="Copy config"
-                                    >
-                                        Copy
-                                    </button>
-                                </div>
-                                <pre
-                                    class="config-code"
-                                    id="geminiConfig"
-                                ></pre>
-                            </div>
-
-                            <div class="config-block">
-                                <div class="config-block-header">
-                                    <span class="config-block-label"
-                                        >Claude Desktop</span
-                                    >
-                                    <span class="config-block-file"
-                                        >claude_desktop_config.json</span
-                                    >
-                                    <button
-                                        class="copy-btn"
-                                        data-copy="claudeConfig"
-                                        title="Copy config"
-                                    >
-                                        Copy
-                                    </button>
-                                </div>
-                                <pre
-                                    class="config-code"
-                                    id="claudeConfig"
-                                ></pre>
+                                <pre class="config-code" id="tomlConfig"></pre>
                             </div>
 
                             <div class="config-note">
-                                <span
-                                    >54 tools available · Port
-                                    <span id="configPort">9876</span> · stdio
-                                    transport</span
+                                <span>54 tools · Port <span id="configPort">9876</span> · stdio</span>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+                <div class="tab-content" id="tab-logs">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <span class="section-label">Tool Error Logs</span>
+                            <div class="log-toolbar">
+                                <select
+                                    id="logSourceFilter"
+                                    class="config-input log-filter"
+                                    aria-label="Log source"
                                 >
+                                    <option value="all">All</option>
+                                    <option value="extension">Ext</option>
+                                    <option value="server">Server</option>
+                                </select>
+                                <button class="text-btn" id="fetchLogsBtn">
+                                    Refresh
+                                </button>
+                                <button class="text-btn" id="clearToolLogsBtn">
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
+                        <p class="field-hint" id="logFilePath"></p>
+                        <div class="log-container" id="toolLogContainer">
+                            <div class="log-entry log-info">
+                                Click Refresh to load tool error logs.
                             </div>
                         </div>
                     </section>
