@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.github.prepushchecker</id>
     <name>Pre-Push Compilation Checker</name>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <vendor email="aswin.kg@zohocorp.com" url="https://github.com/eziocode/IntelliJ-Plugins">eziocode</vendor>
 
     <description><![CDATA[
@@ -38,6 +38,11 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>1.0.1</h3>
+        <ul>
+            <li>Fix EDT violation when triggering a compilation check from the tool window Run Check button</li>
+        </ul>
+
         <h3>1.0.0 — Initial Release</h3>
         <ul>
             <li>Pre-push handler for the IntelliJ Git Push dialog</li>
