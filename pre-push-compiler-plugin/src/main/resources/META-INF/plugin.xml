@@ -2,7 +2,7 @@
     <id>com.github.prepushchecker</id>
     <name>Pre-Push Compilation Checker</name>
     <version>1.0.1</version>
-    <vendor email="aswin.kg@zohocorp.com" url="https://github.com/eziocode/IntelliJ-Plugins">eziocode</vendor>
+    <vendor email="aswin2kumarforme@gmail.com" url="https://github.com/eziocode/IntelliJ-Plugins">eziocode</vendor>
 
     <description><![CDATA[
         <p>Blocks git pushes when your code has compilation errors — before they reach the remote.</p>
