@@ -25,6 +25,7 @@ tasks {
     }
 
     patchPluginXml {
+        version.set(providers.gradleProperty("pluginVersion").get())
         sinceBuild.set("233")
         untilBuild.set("")
     }
@@ -32,7 +33,7 @@ tasks {
     signPlugin {
         certificateChain.set(System.getenv("CERTIFICATE_CHAIN") ?: "")
         privateKey.set(System.getenv("PRIVATE_KEY") ?: "")
-        keyStorePassword.set(System.getenv("PRIVATE_KEY_PASSWORD") ?: "")
+        privateKeyPassword.set(System.getenv("PRIVATE_KEY_PASSWORD") ?: "")
     }
 
     publishPlugin {

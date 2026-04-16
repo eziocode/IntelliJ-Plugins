@@ -1,22 +1,54 @@
 <idea-plugin>
     <id>com.github.prepushchecker</id>
     <name>Pre-Push Compilation Checker</name>
-    <vendor email="support@example.com" url="https://github.com/prepushchecker">PrePushChecker</vendor>
+    <version>1.0.0</version>
+    <vendor email="aswin.kg@zohocorp.com" url="https://github.com/eziocode/IntelliJ-Plugins">eziocode</vendor>
+
     <description><![CDATA[
-        Prevents pushing code with compilation errors to your repository.<br/><br/>
-        <b>How it works:</b>
+        <p>Blocks git pushes when your code has compilation errors — before they reach the remote.</p>
+
+        <h3>How it works</h3>
         <ul>
-            <li><b>IDE push (Git > Push dialog):</b> Uses IntelliJ's real <code>prePushHandler</code>
-                extension point. It first checks whether the IDE already knows about problems in the
-                files being pushed, then compiles only the changed source files. A full project build
-                is used only when build files or deletions make a narrow compile unsafe.</li>
-            <li><b>Terminal / external git push:</b> On project open, the plugin automatically installs
-                a <code>pre-push</code> Git hook that skips non-code pushes, honors an optional
-                <code>PRE_PUSH_CHECKER_COMMAND</code>, and otherwise runs a fast Gradle/Maven compile
-                command before allowing the push.</li>
+            <li><b>IDE Push Guard:</b> Hooks into the IntelliJ Git Push dialog via the
+                <code>prePushHandler</code> extension point. Checks whether the IDE already knows
+                about problems in the pushed files, then compiles only the affected modules.
+                A full project build is used only when build files or file deletions are involved.</li>
+            <li><b>Terminal Push Guard:</b> On project open, the plugin installs a managed
+                <code>pre-push</code> Git hook that runs a fast Gradle or Maven compile before
+                allowing any push from a terminal or external git client.</li>
         </ul>
-        Works with Gradle (wrapper or system), Maven (wrapper or system), and mixed Java/Kotlin JVM projects.
+
+        <h3>Features</h3>
+        <ul>
+            <li>Smart compile scope — module-level by default, project-level when necessary</li>
+            <li>IDE problem check — skips compilation if IntelliJ already reports errors</li>
+            <li>Navigable error dialog — double-click any error to jump to the source file</li>
+            <li>Refresh action — re-run the check from the block dialog without cancelling the push</li>
+            <li>Compilation Checker tool window — side panel showing errors with file navigation</li>
+            <li>Gradle (wrapper or system) and Maven (wrapper or system) support</li>
+            <li>Respects <code>PRE_PUSH_CHECKER_COMMAND</code> env variable for custom check commands</li>
+        </ul>
+
+        <h3>Requirements</h3>
+        <ul>
+            <li>IntelliJ IDEA 2023.3 or later</li>
+            <li>Java 17+</li>
+            <li>Java or Kotlin (JVM) project</li>
+        </ul>
     ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>1.0.0 — Initial Release</h3>
+        <ul>
+            <li>Pre-push handler for the IntelliJ Git Push dialog</li>
+            <li>Smart module-level compile scope with automatic full-build fallback</li>
+            <li>IDE problem check using WolfTheProblemSolver before triggering a build</li>
+            <li>Compilation error dialog with file-type icons, navigation, and Refresh action</li>
+            <li>Compilation Checker tool window (right side panel)</li>
+            <li>Git hook installer for terminal push support (Gradle &amp; Maven)</li>
+            <li>CompilationErrorService for cross-component error state sharing</li>
+        </ul>
+    ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lang</depends>
