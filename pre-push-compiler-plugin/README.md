@@ -103,21 +103,6 @@ Open **View → Tool Windows → Compilation Checker** (or click the side panel 
 
 ---
 
-## Publishing to JetBrains Marketplace
-
-Obtain your signing keys and upload token from [JetBrains Marketplace](https://plugins.jetbrains.com/), then:
-
-```bash
-export CERTIFICATE_CHAIN="<pem>"
-export PRIVATE_KEY="<pem>"
-export PRIVATE_KEY_PASSWORD="<password>"
-export PUBLISH_TOKEN="<token>"
-
-./gradlew signPlugin publishPlugin
-```
-
----
-
 ## License
 
 MIT © [eziocode](https://github.com/eziocode)
