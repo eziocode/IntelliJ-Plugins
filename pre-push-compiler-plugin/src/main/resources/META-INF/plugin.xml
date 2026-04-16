@@ -1,0 +1,35 @@
+<idea-plugin>
+    <id>com.github.prepushchecker</id>
+    <name>Pre-Push Compilation Checker</name>
+    <vendor email="support@example.com" url="https://github.com/prepushchecker">PrePushChecker</vendor>
+    <description><![CDATA[
+        Prevents pushing code with compilation errors to your repository.<br/><br/>
+        <b>How it works:</b>
+        <ul>
+            <li><b>IDE push (Git > Push dialog):</b> Uses IntelliJ's real <code>prePushHandler</code>
+                extension point. It first checks whether the IDE already knows about problems in the
+                files being pushed, then compiles only the changed source files. A full project build
+                is used only when build files or deletions make a narrow compile unsafe.</li>
+            <li><b>Terminal / external git push:</b> On project open, the plugin automatically installs
+                a <code>pre-push</code> Git hook that skips non-code pushes, honors an optional
+                <code>PRE_PUSH_CHECKER_COMMAND</code>, and otherwise runs a fast Gradle/Maven compile
+                command before allowing the push.</li>
+        </ul>
+        Works with Gradle (wrapper or system), Maven (wrapper or system), and mixed Java/Kotlin JVM projects.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.java</depends>
+    <depends>Git4Idea</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <prePushHandler implementation="com.github.prepushchecker.PrePushCompilationHandler"/>
+        <postStartupActivity implementation="com.github.prepushchecker.GitHookInstaller"/>
+        <projectService serviceImplementation="com.github.prepushchecker.CompilationErrorService"/>
+        <toolWindow id="Compilation Checker"
+                    anchor="right"
+                    factoryClass="com.github.prepushchecker.CompilationCheckerToolWindowFactory"
+                    icon="/icons/toolWindowCompilation.svg"/>
+    </extensions>
+</idea-plugin>

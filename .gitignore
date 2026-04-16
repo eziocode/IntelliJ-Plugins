@@ -41,6 +41,3 @@ autodom-extension/pack.sh
 autodom-extension/skills/frontend-design/reference/motion-design.md
 autodom-extension/skills/adapt/SKILL.md
 autodom-extension/.gitignore
-
-# Sibling projects (not part of this repo)
-pre-push-compiler-plugin/
