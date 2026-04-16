@@ -33,7 +33,7 @@ tasks {
     signPlugin {
         certificateChain.set(System.getenv("CERTIFICATE_CHAIN") ?: "")
         privateKey.set(System.getenv("PRIVATE_KEY") ?: "")
-        privateKeyPassword.set(System.getenv("PRIVATE_KEY_PASSWORD") ?: "")
+        password.set(System.getenv("PRIVATE_KEY_PASSWORD") ?: "")
     }
 
     publishPlugin {

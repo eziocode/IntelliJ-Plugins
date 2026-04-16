@@ -42,7 +42,7 @@ Pre-Push Compilation Checker intercepts every `git push` and ensures your code c
 ### From JetBrains Marketplace *(recommended)*
 
 1. Open **Settings → Plugins → Marketplace**
-2. Search for **Pre-Push Compilation Checker**
+2. Search for **Pre-Push Compilation Checker**, or open the [plugin page](https://plugins.jetbrains.com/plugin/31297-pre-push-compilation-checker/) directly
 3. Click **Install** and restart IntelliJ IDEA
 
 ### From Disk
