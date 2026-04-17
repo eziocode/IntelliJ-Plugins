@@ -28,6 +28,7 @@ final class CompilationReportDialog extends DialogWrapper {
     private final Project project;
     private final String header;
     private final Function<ProgressIndicator, List<String>> refreshAction;
+    @Nullable private final Runnable abortCommitAction;
     private final DefaultListModel<String> listModel = new DefaultListModel<>();
 
     CompilationReportDialog(
@@ -37,10 +38,22 @@ final class CompilationReportDialog extends DialogWrapper {
         @NotNull List<String> initialItems,
         @NotNull Function<ProgressIndicator, List<String>> refreshAction
     ) {
+        this(project, title, header, initialItems, refreshAction, null);
+    }
+
+    CompilationReportDialog(
+        @NotNull Project project,
+        @NotNull String title,
+        @NotNull String header,
+        @NotNull List<String> initialItems,
+        @NotNull Function<ProgressIndicator, List<String>> refreshAction,
+        @Nullable Runnable abortCommitAction
+    ) {
         super(project, true);
         this.project = project;
         this.header = header;
         this.refreshAction = refreshAction;
+        this.abortCommitAction = abortCommitAction;
         setTitle(title);
         initialItems.forEach(listModel::addElement);
         init();
@@ -106,6 +119,20 @@ final class CompilationReportDialog extends DialogWrapper {
                 });
             }
         };
-        return new Action[]{refresh, getCancelAction()};
+
+        if (abortCommitAction == null) {
+            return new Action[]{refresh, getCancelAction()};
+        }
+
+        AbstractAction abortCommit = new AbstractAction("Abort Commit") {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                abortCommitAction.run();
+                close(CANCEL_EXIT_CODE);
+            }
+        };
+        abortCommit.putValue(Action.SHORT_DESCRIPTION,
+            "Soft-reset the commits you were trying to push; changes stay in your working tree.");
+        return new Action[]{refresh, abortCommit, getCancelAction()};
     }
 }

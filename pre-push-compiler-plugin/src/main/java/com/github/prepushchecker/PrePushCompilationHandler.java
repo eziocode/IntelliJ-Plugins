@@ -67,6 +67,7 @@ public final class PrePushCompilationHandler implements PrePushHandler {
             }
 
             CompilationErrorService errorService = CompilationErrorService.getInstance(project);
+            Runnable abortCommitAction = buildAbortCommitAction(project, pushDetails);
 
             List<String> problemFiles = collectKnownProblemFiles(project, changeSet.getSourceFiles());
             if (!problemFiles.isEmpty()) {
@@ -77,7 +78,8 @@ public final class PrePushCompilationHandler implements PrePushHandler {
                     "Push Blocked - IDE Problems Found",
                     "IntelliJ already reports problems in files included in this push. Fix them before pushing:",
                     problemFiles,
-                    _ind -> collectKnownProblemFiles(project, changeSet.getSourceFiles())
+                    _ind -> collectKnownProblemFiles(project, changeSet.getSourceFiles()),
+                    abortCommitAction
                 );
                 if (!resolved) return Result.ABORT;
             }
@@ -111,7 +113,8 @@ public final class PrePushCompilationHandler implements PrePushHandler {
                     errors,
                     freshInd -> changeSet.requiresProjectBuild()
                         ? compileProject(project, freshInd)
-                        : compileFiles(project, changeSet.getSourceFiles(), freshInd)
+                        : compileFiles(project, changeSet.getSourceFiles(), freshInd),
+                    abortCommitAction
                 );
                 if (resolved) errorService.setErrors(Collections.emptyList());
                 return resolved ? Result.OK : Result.ABORT;
@@ -340,19 +343,101 @@ public final class PrePushCompilationHandler implements PrePushHandler {
         String title,
         String header,
         List<String> items,
-        Function<ProgressIndicator, List<String>> refreshAction
+        Function<ProgressIndicator, List<String>> refreshAction,
+        @org.jetbrains.annotations.Nullable Runnable abortCommitAction
     ) {
         boolean[] result = {false};
         ApplicationManager.getApplication().invokeAndWait(
             () -> {
                 CompilationReportDialog dialog = new CompilationReportDialog(
-                    project, title, header, items, refreshAction
+                    project, title, header, items, refreshAction, abortCommitAction
                 );
                 result[0] = dialog.showAndGet();
             },
             modalityState
         );
         return result[0];
+    }
+
+    /**
+     * Builds a runnable that soft-resets the commits being pushed, per repository.
+     * Shows a confirmation dialog first. Changes stay in the working tree / index so
+     * the user can fix the errors and re-commit (or amend).
+     */
+    private static Runnable buildAbortCommitAction(Project project, List<PushInfo> pushDetails) {
+        // Count commits per repo root (system-dependent path).
+        java.util.LinkedHashMap<String, Integer> perRoot = new java.util.LinkedHashMap<>();
+        for (PushInfo pushInfo : pushDetails) {
+            for (VcsFullCommitDetails commit : pushInfo.getCommits()) {
+                VirtualFile root = commit.getRoot();
+                if (root == null) continue;
+                perRoot.merge(root.getPath(), 1, Integer::sum);
+            }
+        }
+        if (perRoot.isEmpty()) return null;
+
+        return () -> {
+            String summary = perRoot.entrySet().stream()
+                .map(e -> "  • " + e.getValue() + " commit(s) in "
+                    + com.intellij.openapi.util.io.FileUtil.getLocationRelativeToUserHome(e.getKey()))
+                .collect(java.util.stream.Collectors.joining("\n"));
+            int choice = com.intellij.openapi.ui.Messages.showYesNoDialog(
+                project,
+                "Soft-reset the following commits?\n\n" + summary
+                    + "\n\nYour changes will stay in the working tree so you can fix and re-commit.",
+                "Abort Commit",
+                "Abort Commit",
+                "Cancel",
+                com.intellij.openapi.ui.Messages.getWarningIcon()
+            );
+            if (choice != com.intellij.openapi.ui.Messages.YES) return;
+
+            java.util.List<String> failures = new java.util.ArrayList<>();
+            for (var entry : perRoot.entrySet()) {
+                String root = entry.getKey();
+                int count = entry.getValue();
+                try {
+                    Process p = new ProcessBuilder("git", "reset", "--soft", "HEAD~" + count)
+                        .directory(new java.io.File(root))
+                        .redirectErrorStream(true)
+                        .start();
+                    StringBuilder out = new StringBuilder();
+                    try (java.io.BufferedReader r = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = r.readLine()) != null) {
+                            if (out.length() > 0) out.append('\n');
+                            out.append(line);
+                        }
+                    }
+                    if (!p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)) {
+                        p.destroyForcibly();
+                        failures.add(root + ": timed out");
+                        continue;
+                    }
+                    if (p.exitValue() != 0) {
+                        failures.add(root + ": " + out.toString().trim());
+                    } else {
+                        VirtualFile vf = LocalFileSystem.getInstance().findFileByPath(root);
+                        if (vf != null) vf.refresh(true, true);
+                    }
+                } catch (Exception ex) {
+                    failures.add(root + ": " + ex.getMessage());
+                }
+            }
+
+            String groupId = "Pre-Push Compilation Checker";
+            com.intellij.notification.NotificationType type = failures.isEmpty()
+                ? com.intellij.notification.NotificationType.INFORMATION
+                : com.intellij.notification.NotificationType.ERROR;
+            String message = failures.isEmpty()
+                ? "Soft-reset complete. Your changes are back in the working tree."
+                : "Some repositories could not be reset:\n" + String.join("\n", failures);
+            com.intellij.notification.NotificationGroupManager.getInstance()
+                .getNotificationGroup(groupId)
+                .createNotification("Abort Commit", message, type)
+                .notify(project);
+        };
     }
 
     @FunctionalInterface
