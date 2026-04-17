@@ -250,7 +250,11 @@ public final class PrePushCompilationHandler implements PrePushHandler {
         if (application.isDispatchThread()) {
             startCompilation.run();
         } else {
-            application.invokeAndWait(startCompilation, ModalityState.any());
+            ModalityState modality = indicator.getModalityState();
+            if (modality == null) {
+                modality = ModalityState.defaultModalityState();
+            }
+            application.invokeAndWait(startCompilation, modality);
         }
 
         long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
@@ -274,13 +278,18 @@ public final class PrePushCompilationHandler implements PrePushHandler {
     }
 
     static List<String> formatCompilerMessages(Project project, CompilerMessage[] messages) {
-        List<String> formattedMessages = new ArrayList<>();
+        if (messages == null || messages.length == 0) {
+            return Collections.singletonList("Compilation failed with an unknown compiler error.");
+        }
+
+        List<String> formattedMessages = new ArrayList<>(messages.length);
+        StringBuilder builder = new StringBuilder(128);
         for (CompilerMessage message : messages) {
             if (message == null) {
                 continue;
             }
 
-            StringBuilder builder = new StringBuilder();
+            builder.setLength(0);
             VirtualFile file = message.getVirtualFile();
             builder.append('[');
             builder.append(file != null ? toDisplayPath(project, file) : "unknown");
@@ -288,7 +297,9 @@ public final class PrePushCompilationHandler implements PrePushHandler {
             if (prefix != null && !prefix.isBlank()) {
                 builder.append(' ').append(prefix.trim());
             }
-            builder.append("] ").append(message.getMessage());
+            builder.append("] ");
+            String msg = message.getMessage();
+            builder.append(msg != null ? msg : "");
             formattedMessages.add(builder.toString());
         }
 

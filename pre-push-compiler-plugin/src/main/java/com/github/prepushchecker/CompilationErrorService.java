@@ -2,6 +2,7 @@ package com.github.prepushchecker;
 
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.Service;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import org.jetbrains.annotations.NotNull;
 
@@ -17,6 +18,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Service(Service.Level.PROJECT)
 public final class CompilationErrorService {
 
+    private static final Logger LOG = Logger.getInstance(CompilationErrorService.class);
+
     private volatile List<String> errors = Collections.emptyList();
     private final CopyOnWriteArrayList<Runnable> listeners = new CopyOnWriteArrayList<>();
 
@@ -25,7 +28,11 @@ public final class CompilationErrorService {
     }
 
     public void setErrors(@NotNull List<String> newErrors) {
-        this.errors = List.copyOf(newErrors);
+        List<String> snapshot = List.copyOf(newErrors);
+        if (snapshot.equals(this.errors)) {
+            return;
+        }
+        this.errors = snapshot;
         ApplicationManager.getApplication().invokeLater(this::fireListeners);
     }
 
@@ -43,7 +50,11 @@ public final class CompilationErrorService {
 
     private void fireListeners() {
         for (Runnable listener : listeners) {
-            listener.run();
+            try {
+                listener.run();
+            } catch (Exception e) {
+                LOG.warn("CompilationErrorService listener threw", e);
+            }
         }
     }
 }

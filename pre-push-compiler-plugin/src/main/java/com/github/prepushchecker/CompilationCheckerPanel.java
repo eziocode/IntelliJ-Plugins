@@ -1,6 +1,7 @@
 package com.github.prepushchecker;
 
 import com.intellij.icons.AllIcons;
+import com.intellij.ide.BrowserUtil;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.ActionUpdateThread;
@@ -19,6 +20,9 @@ import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBList;
 import com.intellij.ui.components.JBScrollPane;
 import org.jetbrains.annotations.NotNull;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 import javax.swing.*;
 import java.awt.*;
@@ -49,7 +53,7 @@ final class CompilationCheckerPanel extends JPanel implements Disposable {
         DefaultActionGroup group = new DefaultActionGroup();
         group.add(new RunCheckAction());
         group.addSeparator();
-        group.add(new ClearAction());
+        group.add(new ReportAction());
         var toolbar = ActionManager.getInstance()
             .createActionToolbar("CompilationCheckerToolbar", group, true);
         toolbar.setTargetComponent(this);
@@ -138,7 +142,7 @@ final class CompilationCheckerPanel extends JPanel implements Disposable {
                                     }
                                     latch.countDown();
                                 }),
-                            ModalityState.any()
+                            ModalityState.defaultModalityState()
                         );
 
                         try {
@@ -155,10 +159,14 @@ final class CompilationCheckerPanel extends JPanel implements Disposable {
         }
     }
 
-    private final class ClearAction extends AnAction {
+    private final class ReportAction extends AnAction {
 
-        ClearAction() {
-            super("Clear", "Clear the error list", AllIcons.Actions.GC);
+        private static final String ISSUES_NEW_URL =
+            "https://github.com/eziocode/IntelliJ-Plugins/issues/new";
+
+        ReportAction() {
+            super("Report Issue", "Open a new GitHub issue for this plugin",
+                AllIcons.General.BalloonWarning);
         }
 
         @Override
@@ -168,7 +176,13 @@ final class CompilationCheckerPanel extends JPanel implements Disposable {
 
         @Override
         public void actionPerformed(@NotNull AnActionEvent e) {
-            CompilationErrorService.getInstance(project).setErrors(Collections.emptyList());
+            int errorCount = CompilationErrorService.getInstance(project).getErrors().size();
+            String title = errorCount > 0
+                ? "[Pre-Push Checker] Issue with compilation check (" + errorCount + " error(s))"
+                : "[Pre-Push Checker] ";
+            String url = ISSUES_NEW_URL + "?title="
+                + URLEncoder.encode(title, StandardCharsets.UTF_8);
+            BrowserUtil.browse(url);
         }
     }
 }
