@@ -53,6 +53,8 @@ final class CompilationCheckerPanel extends JPanel implements Disposable {
         DefaultActionGroup group = new DefaultActionGroup();
         group.add(new RunCheckAction());
         group.addSeparator();
+        group.add(new RebuildCachesAction());
+        group.addSeparator();
         group.add(new ReportAction());
         var toolbar = ActionManager.getInstance()
             .createActionToolbar("CompilationCheckerToolbar", group, true);
@@ -155,6 +157,66 @@ final class CompilationCheckerPanel extends JPanel implements Disposable {
 
                         // Record project-scope result so a subsequent push with no file
                         // changes can reuse the cached verdict instead of rebuilding.
+                        CompilationErrorService.getInstance(project).recordCompletion(
+                            true, java.util.Collections.emptyMap(), result.get());
+                    }
+                });
+        }
+    }
+
+    private final class RebuildCachesAction extends AnAction {
+
+        RebuildCachesAction() {
+            super("Rebuild Compiler Caches",
+                "Full rebuild — use when incremental builds seem to miss errors " +
+                    "(stale JPS dep-graph, interrupted builds, external writes).",
+                AllIcons.Actions.ForceRefresh);
+        }
+
+        @Override
+        public @NotNull ActionUpdateThread getActionUpdateThread() {
+            return ActionUpdateThread.BGT;
+        }
+
+        @Override
+        public void actionPerformed(@NotNull AnActionEvent e) {
+            int choice = com.intellij.openapi.ui.Messages.showYesNoDialog(
+                project,
+                "Rebuild will clear JPS caches and recompile the entire project. " +
+                    "This can take several minutes on a large project. Continue?",
+                "Rebuild Compiler Caches",
+                com.intellij.openapi.ui.Messages.getQuestionIcon()
+            );
+            if (choice != com.intellij.openapi.ui.Messages.YES) return;
+
+            ProgressManager.getInstance().run(
+                new Task.Backgroundable(project, "Rebuilding Compiler Caches", true) {
+                    @Override
+                    public void run(@NotNull ProgressIndicator indicator) {
+                        CompilerManager compiler = CompilerManager.getInstance(project);
+                        CountDownLatch latch = new CountDownLatch(1);
+                        AtomicReference<List<String>> result =
+                            new AtomicReference<>(Collections.emptyList());
+
+                        ApplicationManager.getApplication().invokeAndWait(() ->
+                            compiler.rebuild((aborted, errorCount, warnings, ctx) -> {
+                                if (!aborted && errorCount > 0) {
+                                    result.set(PrePushCompilationHandler.formatCompilerMessages(
+                                        project, ctx.getMessages(CompilerMessageCategory.ERROR)));
+                                }
+                                latch.countDown();
+                            }),
+                            ModalityState.defaultModalityState()
+                        );
+
+                        try {
+                            while (!latch.await(250, TimeUnit.MILLISECONDS)) {
+                                indicator.checkCanceled();
+                            }
+                        } catch (InterruptedException ignored) {
+                            Thread.currentThread().interrupt();
+                        }
+
                         CompilationErrorService.getInstance(project).recordCompletion(
                             true, java.util.Collections.emptyMap(), result.get());
                     }

@@ -95,6 +95,12 @@
         <registryKey key="prepushchecker.warmup.enabled"
                      defaultValue="true"
                      description="Run a debounced background compile of recently saved files so pre-push checks hit the cache and finish instantly."/>
+        <registryKey key="prepushchecker.widen.callers"
+                     defaultValue="true"
+                     description="Before compiling the pushed set, widen it with known callers from the compiler reference index. Guards against stale JPS dep-graphs that would otherwise miss A-depends-on-B breakage."/>
+        <registryKey key="prepushchecker.widen.callers.cap"
+                     defaultValue="2000"
+                     description="Maximum number of additional caller files added to the pre-push compile set (guards against runaway widening for widely-used utility classes)."/>
         <notificationGroup id="Pre-Push Compilation Checker"
                            displayType="BALLOON"
                            isLogByDefault="true"/>
