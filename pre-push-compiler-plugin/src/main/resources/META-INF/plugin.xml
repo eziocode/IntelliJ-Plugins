@@ -95,12 +95,9 @@
         <registryKey key="prepushchecker.warmup.enabled"
                      defaultValue="true"
                      description="Run a debounced background compile of recently saved files so pre-push checks hit the cache and finish instantly."/>
-        <registryKey key="prepushchecker.widen.callers"
-                     defaultValue="false"
-                     description="Experimental: before compiling the pushed set, widen it with known callers from the compiler reference index. Off by default — make() already pulls dependents via JPS. Enable only if you suspect the JPS dep-graph is unreliable on your project."/>
-        <registryKey key="prepushchecker.widen.callers.cap"
-                     defaultValue="500"
-                     description="Maximum number of additional caller files added to the pre-push compile set when widening is enabled."/>
+        <registryKey key="prepushchecker.scope.modules.cap"
+                     defaultValue="50"
+                     description="Maximum number of modules (pushed modules plus their dependents) included in the pre-push compile scope. If exceeded, falls back to file scope to avoid churning the world when a widely-used utility module is pushed."/>
         <notificationGroup id="Pre-Push Compilation Checker"
                            displayType="BALLOON"
                            isLogByDefault="true"/>

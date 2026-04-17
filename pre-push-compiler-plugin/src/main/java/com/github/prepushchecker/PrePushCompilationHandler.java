@@ -11,10 +11,13 @@ import com.intellij.openapi.compiler.CompilerManager;
 import com.intellij.openapi.compiler.CompilerMessage;
 import com.intellij.openapi.compiler.CompilerMessageCategory;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleManager;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectFileIndex;
+import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.util.registry.Registry;
 import com.intellij.openapi.vcs.changes.Change;
@@ -22,11 +25,6 @@ import com.intellij.openapi.vcs.changes.ContentRevision;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.problems.WolfTheProblemSolver;
-import com.intellij.psi.PsiClass;
-import com.intellij.psi.PsiClassOwner;
-import com.intellij.psi.PsiFile;
-import com.intellij.psi.PsiManager;
-import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.vcs.log.VcsFullCommitDetails;
 import org.jetbrains.annotations.NotNull;
 
@@ -215,16 +213,10 @@ public final class PrePushCompilationHandler implements PrePushHandler {
         if (sourceFiles.isEmpty()) {
             return Collections.emptyList();
         }
-
         CompilerManager compilerManager = CompilerManager.getInstance(project);
-        // Incremental make on the pushed files. Unlike compile(files[]), make(filesScope) walks
-        // module dependencies first, so javac sees the full classpath (no false
-        // "package does not exist" errors on stale sibling modules), and JPS pulls caller files
-        // into the recompile. On a warm cache — kept warm by CompilationWarmupService — this is
-        // effectively free; on a cold cache it builds only what's actually stale.
-        Collection<VirtualFile> widened = widenWithCallers(project, sourceFiles, indicator);
-        VirtualFile[] filesArray = widened.toArray(VirtualFile.EMPTY_ARRAY);
-        CompileScope scope = compilerManager.createFilesCompileScope(filesArray);
+        CompileScope scope = ApplicationManager.getApplication().runReadAction(
+            (Computable<CompileScope>) () -> buildPushScope(project, sourceFiles, compilerManager)
+        );
         return runCompilation(
             project,
             indicator,
@@ -234,83 +226,60 @@ public final class PrePushCompilationHandler implements PrePushHandler {
     }
 
     /**
-     * Widens the compile set with callers of every top-level class in {@code sourceFiles}, using
-     * the IDE's backward-references index. This protects against cases where JPS's own
-     * dep-graph is stale (interrupted builds, external writes, cache schema drift) and fails to
-     * drag callers in on its own.
+     * Picks the smallest {@link CompileScope} that still guarantees A-depends-on-B coverage.
      *
-     * <p>Fails open: on any missing API, inactive index, or unexpected error, returns the
-     * original set. The final compile is still force-recompiled so correctness never degrades
-     * below the Phase-1 baseline.
+     * <ul>
+     *   <li>Resolve each pushed file's module.</li>
+     *   <li>Union in every module that <em>depends on</em> that module
+     *       ({@link ModuleManager#getModuleDependentModules}) — these are the potential callers.
+     *       The lookup is a pure module-graph query, no file iteration.</li>
+     *   <li>{@code make} that union. JPS runs incrementally, so only actually-stale files in
+     *       those modules are recompiled; warm files are skipped. Because the caller modules
+     *       are in the scope explicitly, JPS cannot "forget" to recompile a caller the way a
+     *       stale dep-graph sometimes does with a file-only scope.</li>
+     *   <li>Safety cap ({@code prepushchecker.scope.modules.cap}, default 50): if a pushed
+     *       file lives in a very widely-used utility module and would drag most of the project
+     *       in, fall back to the narrower file scope rather than churning the world.</li>
+     *   <li>If no module can be resolved (file outside content roots), use file scope.</li>
+     * </ul>
+     *
+     * Must be called under a read action.
      */
-    private static Collection<VirtualFile> widenWithCallers(
-        Project project,
-        Collection<VirtualFile> sourceFiles,
-        ProgressIndicator indicator
-    ) {
-        if (!Registry.is("prepushchecker.widen.callers", false)) {
-            return sourceFiles;
+    /** Package-private helper so the socket server can reuse the adaptive scope policy. */
+    static CompileScope buildPushScopeForExternal(Project project,
+                                                  Collection<VirtualFile> files,
+                                                  CompilerManager cm) {
+        return ApplicationManager.getApplication().runReadAction(
+            (Computable<CompileScope>) () -> buildPushScope(project, files, cm)
+        );
+    }
+
+    private static CompileScope buildPushScope(Project project,
+                                               Collection<VirtualFile> files,
+                                               CompilerManager cm) {
+        ProjectFileIndex idx = ProjectFileIndex.getInstance(project);
+        ModuleManager mm = ModuleManager.getInstance(project);
+        Set<Module> modules = new LinkedHashSet<>();
+        for (VirtualFile f : files) {
+            Module m = idx.getModuleForFile(f, false);
+            if (m == null) continue;
+            modules.add(m);
+            modules.addAll(mm.getModuleDependentModules(m));
         }
-        try {
-            Set<VirtualFile> expanded = new LinkedHashSet<>(sourceFiles);
-            int capAdditional = Registry.intValue("prepushchecker.widen.callers.cap", 500);
-            if (capAdditional <= 0) return sourceFiles;
-
-            ApplicationManager.getApplication().runReadAction(() -> {
-                Class<?> crsCls;
-                Object svc;
-                java.lang.reflect.Method scopeMethod;
-                try {
-                    crsCls = Class.forName("com.intellij.compiler.backwardRefs.CompilerReferenceService");
-                    java.lang.reflect.Method getInstance = crsCls.getMethod("getInstance", Project.class);
-                    svc = getInstance.invoke(null, project);
-                    if (svc == null) return;
-                    scopeMethod = crsCls.getMethod("getScopeWithCodeReferences", com.intellij.psi.PsiElement.class);
-                } catch (Throwable t) {
-                    return;
-                }
-
-                PsiManager psiManager = PsiManager.getInstance(project);
-                List<GlobalSearchScope> scopes = new ArrayList<>();
-                for (VirtualFile f : sourceFiles) {
-                    if (indicator != null && indicator.isCanceled()) return;
-                    PsiFile pf = psiManager.findFile(f);
-                    if (!(pf instanceof PsiClassOwner)) continue;
-                    for (PsiClass cls : ((PsiClassOwner) pf).getClasses()) {
-                        try {
-                            Object s = scopeMethod.invoke(svc, cls);
-                            if (s instanceof GlobalSearchScope) scopes.add((GlobalSearchScope) s);
-                        } catch (Throwable ignored) {
-                            // Experimental API — skip this class if the service refuses it.
-                        }
-                    }
-                }
-                if (scopes.isEmpty()) return;
-
-                GlobalSearchScope union = GlobalSearchScope.union(scopes.toArray(new GlobalSearchScope[0]));
-                ProjectFileIndex idx = ProjectFileIndex.getInstance(project);
-                int[] added = {0};
-                idx.iterateContent(vf -> {
-                    if (added[0] >= capAdditional) return false;
-                    if (indicator != null && indicator.isCanceled()) return false;
-                    if (vf.isDirectory() || !vf.isValid()) return true;
-                    String path = vf.getPath();
-                    if (!PushValidationPaths.isCompilableSource(path)) return true;
-                    if (!idx.isInSourceContent(vf)) return true;
-                    if (union.contains(vf) && expanded.add(vf)) {
-                        added[0]++;
-                    }
-                    return true;
-                });
-                if (added[0] > 0) {
-                    LOG.info("Pre-push: widened compile set with " + added[0] + " known caller file(s).");
-                }
-            });
-            return expanded;
-        } catch (Throwable e) {
-            LOG.debug("Pre-push: caller-scope widening unavailable, continuing with pushed set only.", e);
-            return sourceFiles;
+        VirtualFile[] fileArr = files.toArray(VirtualFile.EMPTY_ARRAY);
+        if (modules.isEmpty()) {
+            LOG.info("Pre-push: no module resolved for pushed files, using file scope.");
+            return cm.createFilesCompileScope(fileArr);
         }
+        int cap = Registry.intValue("prepushchecker.scope.modules.cap", 50);
+        if (modules.size() > cap) {
+            LOG.info("Pre-push: dependent-module count " + modules.size()
+                + " exceeds cap " + cap + "; falling back to file scope.");
+            return cm.createFilesCompileScope(fileArr);
+        }
+        LOG.info("Pre-push: make scope = " + modules.size()
+            + " module(s) (pushed + dependents), incremental.");
+        return cm.createModulesCompileScope(modules.toArray(Module.EMPTY_ARRAY), false);
     }
 
     private static List<String> compileProject(Project project, ProgressIndicator indicator) {

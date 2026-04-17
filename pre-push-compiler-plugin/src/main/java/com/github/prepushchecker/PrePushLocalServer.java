@@ -228,11 +228,9 @@ public final class PrePushLocalServer implements Disposable {
                     };
 
                 if (!files.isEmpty()) {
-                    // Incremental make on the pushed files. Unlike compile(files[]), make with a
-                    // file scope walks module deps first, so javac sees the full classpath (no
-                    // false "package does not exist" errors when a sibling module is stale), and
-                    // JPS still pulls caller files in.
-                    CompileScope scope = cm.createFilesCompileScope(files.toArray(VirtualFile.EMPTY_ARRAY));
+                    // Same adaptive scope as the in-IDE push path: include dependent modules so
+                    // JPS cannot miss A-depends-on-B breakage, but keep it incremental.
+                    CompileScope scope = PrePushCompilationHandler.buildPushScopeForExternal(project, files, cm);
                     cm.make(scope, callback);
                 } else {
                     cm.make(cm.createProjectCompileScope(project), callback);
