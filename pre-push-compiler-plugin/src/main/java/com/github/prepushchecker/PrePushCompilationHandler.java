@@ -82,9 +82,24 @@ public final class PrePushCompilationHandler implements PrePushHandler {
                 if (!resolved) return Result.ABORT;
             }
 
-            List<String> errors = changeSet.requiresProjectBuild()
-                ? compileProject(project, indicator)
-                : compileFiles(project, changeSet.getSourceFiles(), indicator);
+            // Reuse a recent compile verdict when nothing has moved on disk since it ran.
+            // This skips a redundant full rebuild when e.g. the user just ran the manual
+            // "Run Compilation Check" and is now pushing without edits.
+            List<String> cached = errorService.tryReuse(changeSet.getSourceFiles());
+            List<String> errors;
+            if (cached != null) {
+                LOG.info("Reusing cached compilation result (" + cached.size() + " error(s)).");
+                errors = cached;
+            } else {
+                errors = changeSet.requiresProjectBuild()
+                    ? compileProject(project, indicator)
+                    : compileFiles(project, changeSet.getSourceFiles(), indicator);
+                errorService.recordCompletion(
+                    changeSet.requiresProjectBuild(),
+                    CompilationErrorService.snapshotStamps(changeSet.getSourceFiles()),
+                    errors
+                );
+            }
 
             if (!errors.isEmpty()) {
                 errorService.setErrors(errors);

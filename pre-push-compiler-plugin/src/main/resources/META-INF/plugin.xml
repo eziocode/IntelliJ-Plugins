@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>com.github.prepushchecker</id>
     <name>Pre-Push Compilation Checker</name>
-    <version>1.0.1</version>
+    <version>1.2.0</version>
     <vendor email="aswin2kumarforme@gmail.com" url="https://github.com/eziocode/IntelliJ-Plugins">eziocode</vendor>
 
     <description><![CDATA[
@@ -38,6 +38,30 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>1.2.0</h3>
+        <ul>
+            <li><b>External push guard (terminal, Sublime Merge, SourceTree, GitHub Desktop, etc.):</b>
+                hook installation now resolves the real hooks directory via <code>git rev-parse --git-path hooks</code>,
+                so it works in worktrees, submodules, and repos that set <code>core.hooksPath</code>.</li>
+            <li><b>Stricter external check:</b> the hook now also compiles test sources
+                (<code>classes testClasses</code> / <code>test-compile</code>) so test-only breakage is caught.</li>
+            <li><b>Errors from external pushes surface inside IntelliJ:</b> the hook writes a log to
+                <code>.idea/pre-push-checker/last-run.log</code>. A new startup activity parses that log on
+                project open and on every hook run, feeds errors into the Compilation Checker tool window,
+                and raises a notification with an "Open Compilation Checker" action.</li>
+            <li>Managed wrapper is refreshed on every project open so hook upgrades ship automatically.</li>
+        </ul>
+
+        <h3>1.1.0</h3>
+        <ul>
+            <li><b>Tool window:</b> Replaced the "Clear" action with a "Report Issue" action that opens the plugin's GitHub Issues page with a pre-populated, concise title (no large error payload stuffed into the URL).</li>
+            <li><b>Readable error list:</b> Entries now render as <code>FileName:line:col — message</code> instead of the raw <code>[full/deep/path (line, col)] message</code>. The full entry is preserved as a tooltip on hover.</li>
+            <li><b>Navigation fix:</b> Double-click / Enter now correctly opens the source file for entries that use the <code>[path (line, col)]</code> compiler format. Also supports paths containing spaces.</li>
+            <li><b>Pre-push EDT fix:</b> Replaced <code>ModalityState.any()</code> with the progress indicator's modality (falling back to the default) when triggering a compilation from a background thread. Prevents "Write-unsafe context" errors during compile setup.</li>
+            <li><b>Robustness:</b> Null-safe compiler-message formatting, exception-isolated listener fan-out in <code>CompilationErrorService</code>, and short-circuit when the new error list equals the previous snapshot.</li>
+            <li><b>Performance:</b> Per-extension icon cache in the list renderer, allocation-free source-extension check in <code>PushValidationPaths</code>, reused <code>StringBuilder</code> when formatting compiler messages, and pre-sized result lists.</li>
+        </ul>
+
         <h3>1.0.1</h3>
         <ul>
             <li>Fix EDT violation when triggering a compilation check from the tool window Run Check button</li>
@@ -63,7 +87,12 @@
     <extensions defaultExtensionNs="com.intellij">
         <prePushHandler implementation="com.github.prepushchecker.PrePushCompilationHandler"/>
         <postStartupActivity implementation="com.github.prepushchecker.GitHookInstaller"/>
+        <postStartupActivity implementation="com.github.prepushchecker.ExternalPushErrorLoader"/>
+        <postStartupActivity implementation="com.github.prepushchecker.PrePushLocalServer$Starter"/>
         <projectService serviceImplementation="com.github.prepushchecker.CompilationErrorService"/>
+        <notificationGroup id="Pre-Push Compilation Checker"
+                           displayType="BALLOON"
+                           isLogByDefault="true"/>
         <toolWindow id="Compilation Checker"
                     anchor="right"
                     factoryClass="com.github.prepushchecker.CompilationCheckerToolWindowFactory"

@@ -3,7 +3,7 @@
 > An IntelliJ IDEA plugin that blocks git pushes when compilation errors exist — before they reach your remote.
 
 ![Platform](https://img.shields.io/badge/platform-IntelliJ%202023.3%2B-orange)
-![Version](https://img.shields.io/badge/version-1.0.1-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![Java](https://img.shields.io/badge/java-17%2B-green)
 
 ---
@@ -64,15 +64,20 @@ Pre-Push Compilation Checker intercepts every `git push` and ensures your code c
 5. If compilation fails, a dialog shows the full error list with file navigation. You can fix the errors and click **Refresh** to recheck without restarting the push.
 6. Once compilation passes the push proceeds normally.
 
-### Terminal / External Git Push
+### Terminal / External Git Push (Sublime Merge, SourceTree, GitHub Desktop, …)
 
-On project open the plugin installs a managed `pre-push` hook in `.git/hooks/`. When you run `git push` from a terminal:
+On project open the plugin installs a managed `pre-push` hook in your repo's hooks directory. The hooks directory is resolved the same way git itself does (via `git rev-parse --git-path hooks`), so worktrees, submodules, and repos that set `core.hooksPath` are handled correctly.
+
+When you push from a terminal or an external git client:
 
 1. The hook filters out non-code pushes (tags, empty pushes, deletion-only pushes).
 2. It honors the `PRE_PUSH_CHECKER_COMMAND` environment variable if set, letting you plug in any custom check command.
-3. Otherwise it runs `./gradlew compileJava compileTestJava` (or the Maven equivalent) and blocks the push on failure.
+3. Otherwise it runs `./gradlew classes testClasses` (or the Maven `test-compile` equivalent) — both main and test sources — and blocks the push on failure.
+4. The full compiler output is written to `.idea/pre-push-checker/last-run.log`. When IntelliJ is open:
+   - It **parses the log**, extracts the error locations, and shows them in the **Compilation Checker** tool window so you can double-click to jump to the offending line.
+   - It raises a **balloon notification** with an *Open Compilation Checker* action so the errors are front-and-centre even if you were working in a different tool window.
 
-> The hook is written idempotently — it only overwrites hooks it previously installed and never clobbers a custom hook you wrote yourself.
+> The hook is written idempotently — it only overwrites hooks it previously installed, and chains non-destructively when a custom `pre-push` hook already exists.
 
 ---
 
@@ -80,11 +85,11 @@ On project open the plugin installs a managed `pre-push` hook in `.git/hooks/`. 
 
 Open **View → Tool Windows → Compilation Checker** (or click the side panel icon) to:
 
-- View errors from the last pre-push check or manual run
+- View errors from the last pre-push check or manual run, rendered as `FileName:line:col — message` with the full path available on hover
 - See file-type icons for quick visual identification
 - **Run Check** button (hammer icon) — triggers a full project compile on demand
-- **Clear** button (GC icon) — clears the current error list
-- Double-click or press **Enter** on any entry — jumps to the file in the editor
+- **Report Issue** button (warning icon) — opens the plugin's GitHub Issues page with a pre-populated title so you can file a bug in two clicks
+- Double-click or press **Enter** on any entry — jumps to the file and line in the editor
 
 ---
 
@@ -106,3 +111,9 @@ Open **View → Tool Windows → Compilation Checker** (or click the side panel 
 ## License
 
 MIT © [eziocode](https://github.com/eziocode)
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history. Latest release: **1.2.0**.

@@ -153,7 +153,10 @@ final class CompilationCheckerPanel extends JPanel implements Disposable {
                             Thread.currentThread().interrupt();
                         }
 
-                        CompilationErrorService.getInstance(project).setErrors(result.get());
+                        // Record project-scope result so a subsequent push with no file
+                        // changes can reuse the cached verdict instead of rebuilding.
+                        CompilationErrorService.getInstance(project).recordCompletion(
+                            true, java.util.Collections.emptyMap(), result.get());
                     }
                 });
         }
