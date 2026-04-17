@@ -98,4 +98,9 @@
                     factoryClass="com.github.prepushchecker.CompilationCheckerToolWindowFactory"
                     icon="/icons/toolWindowCompilation.svg"/>
     </extensions>
+
+    <applicationListeners>
+        <listener class="com.github.prepushchecker.PluginLifecycleListener"
+                  topic="com.intellij.ide.plugins.DynamicPluginListener"/>
+    </applicationListeners>
 </idea-plugin>

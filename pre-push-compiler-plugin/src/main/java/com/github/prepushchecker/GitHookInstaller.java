@@ -130,6 +130,104 @@ public final class GitHookInstaller implements StartupActivity {
         }
     }
 
+    /**
+     * Reverse of {@link #runActivity} and {@link #addToRepoLocalExclude}. Invoked when the
+     * plugin is being uninstalled or disabled so the repo is left in a clean state:
+     * <ul>
+     *   <li>Removes the managed hook script ({@value #MANAGED_HOOK_NAME}).</li>
+     *   <li>Restores the main {@code pre-push} hook: deletes it if it is our plain wrapper,
+     *       strips our delegating snippet if we only chained into an existing hook.</li>
+     *   <li>Deletes the {@code .idea/pre-push-checker/} cache/log directory.</li>
+     *   <li>Strips the plugin's delimited block from {@code .git/info/exclude}.</li>
+     * </ul>
+     * Safe to call repeatedly; missing files are ignored.
+     */
+    static void uninstall(String basePath) {
+        if (basePath == null || basePath.isBlank()) return;
+
+        Path hooksDirectory = resolveHooksDirectory(basePath);
+        if (hooksDirectory != null) {
+            Path mainHook = hooksDirectory.resolve("pre-push");
+            Path managedHook = hooksDirectory.resolve(MANAGED_HOOK_NAME);
+            try { Files.deleteIfExists(managedHook); } catch (IOException ignored) {}
+
+            if (Files.exists(mainHook)) {
+                try {
+                    String content = Files.readString(mainHook, StandardCharsets.UTF_8);
+                    if (content.equals(buildWrapperHookScript())) {
+                        Files.deleteIfExists(mainHook);
+                    } else if (content.contains(HOOK_MARKER)) {
+                        String snippet = buildDelegatingSnippet();
+                        String cleaned = content.contains(snippet)
+                            ? content.replace(snippet, "")
+                            : stripDelegatingLines(content);
+                        cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
+                        if (cleaned.isBlank()) {
+                            Files.deleteIfExists(mainHook);
+                        } else {
+                            Files.writeString(mainHook, cleaned, StandardCharsets.UTF_8);
+                        }
+                    }
+                } catch (IOException ignored) {}
+            }
+        }
+
+        // Remove plugin cache + log dir.
+        Path cacheDir = Path.of(basePath, ".idea", "pre-push-checker");
+        deleteRecursively(cacheDir);
+
+        // Strip the .git/info/exclude block.
+        Path gitDir = queryGit(basePath, "rev-parse", "--git-common-dir");
+        if (gitDir == null) {
+            Path fallback = Path.of(basePath, ".git");
+            if (Files.isDirectory(fallback)) gitDir = fallback;
+        }
+        if (gitDir != null) {
+            Path excludeFile = gitDir.resolve("info").resolve("exclude");
+            if (Files.exists(excludeFile)) {
+                try {
+                    String existing = Files.readString(excludeFile, StandardCharsets.UTF_8);
+                    String stripped = stripExistingBlock(existing);
+                    if (!stripped.equals(existing)) {
+                        Files.writeString(excludeFile, stripped, StandardCharsets.UTF_8);
+                    }
+                } catch (IOException ignored) {}
+            }
+        }
+
+        LOG.info("Pre-Push Compilation Checker: cleaned hooks and cache under " + basePath);
+    }
+
+    private static String stripDelegatingLines(String content) {
+        StringBuilder out = new StringBuilder(content.length());
+        String[] lines = content.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.trim().equals("# " + HOOK_MARKER)) {
+                // Skip marker line plus the two snippet lines that follow, if they match.
+                int skip = 1;
+                if (i + 1 < lines.length && lines[i + 1].contains("SCRIPT_DIR=")) skip++;
+                if (i + skip < lines.length && lines[i + skip].contains(MANAGED_HOOK_NAME)) skip++;
+                i += skip - 1;
+                continue;
+            }
+            out.append(line);
+            if (i < lines.length - 1) out.append('\n');
+        }
+        return out.toString();
+    }
+
+    private static void deleteRecursively(Path path) {
+        if (!Files.exists(path)) return;
+        try {
+            try (var stream = Files.walk(path)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+                });
+            }
+        } catch (IOException ignored) {}
+    }
+
     private static String stripExistingBlock(String content) {
         if (content.isEmpty()) return content;
         String begin = "# BEGIN " + HOOK_MARKER;
