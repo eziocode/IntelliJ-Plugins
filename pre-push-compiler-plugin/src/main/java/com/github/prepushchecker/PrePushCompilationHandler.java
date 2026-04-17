@@ -217,16 +217,19 @@ public final class PrePushCompilationHandler implements PrePushHandler {
         }
 
         CompilerManager compilerManager = CompilerManager.getInstance(project);
-        // Force javac on the exact pushed set plus known callers. JPS usually pulls dependents on
-        // its own, but a stale/half-written dep-graph can miss them. Adding callers ourselves via
-        // CompilerReferenceService is a belt-and-suspenders guard against that blind spot.
+        // Incremental make on the pushed files. Unlike compile(files[]), make(filesScope) walks
+        // module dependencies first, so javac sees the full classpath (no false
+        // "package does not exist" errors on stale sibling modules), and JPS pulls caller files
+        // into the recompile. On a warm cache — kept warm by CompilationWarmupService — this is
+        // effectively free; on a cold cache it builds only what's actually stale.
         Collection<VirtualFile> widened = widenWithCallers(project, sourceFiles, indicator);
         VirtualFile[] filesArray = widened.toArray(VirtualFile.EMPTY_ARRAY);
+        CompileScope scope = compilerManager.createFilesCompileScope(filesArray);
         return runCompilation(
             project,
             indicator,
             TARGETED_TIMEOUT_MILLIS,
-            notification -> compilerManager.compile(filesArray, notification)
+            notification -> compilerManager.make(scope, notification)
         );
     }
 
@@ -245,12 +248,12 @@ public final class PrePushCompilationHandler implements PrePushHandler {
         Collection<VirtualFile> sourceFiles,
         ProgressIndicator indicator
     ) {
-        if (!Registry.is("prepushchecker.widen.callers", true)) {
+        if (!Registry.is("prepushchecker.widen.callers", false)) {
             return sourceFiles;
         }
         try {
             Set<VirtualFile> expanded = new LinkedHashSet<>(sourceFiles);
-            int capAdditional = Registry.intValue("prepushchecker.widen.callers.cap", 2000);
+            int capAdditional = Registry.intValue("prepushchecker.widen.callers.cap", 500);
             if (capAdditional <= 0) return sourceFiles;
 
             ApplicationManager.getApplication().runReadAction(() -> {

@@ -3,6 +3,7 @@ package com.github.prepushchecker;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
+import com.intellij.openapi.compiler.CompileScope;
 import com.intellij.openapi.compiler.CompilerManager;
 import com.intellij.openapi.compiler.CompilerMessageCategory;
 import com.intellij.openapi.diagnostic.Logger;
@@ -227,10 +228,12 @@ public final class PrePushLocalServer implements Disposable {
                     };
 
                 if (!files.isEmpty()) {
-                    // Force javac on the exact set of files in the push. JPS will pull in
-                    // their dependents too, so A-depends-on-B breakage is caught even when
-                    // JPS's incremental cache would have skipped the caller.
-                    cm.compile(files.toArray(VirtualFile.EMPTY_ARRAY), callback);
+                    // Incremental make on the pushed files. Unlike compile(files[]), make with a
+                    // file scope walks module deps first, so javac sees the full classpath (no
+                    // false "package does not exist" errors when a sibling module is stale), and
+                    // JPS still pulls caller files in.
+                    CompileScope scope = cm.createFilesCompileScope(files.toArray(VirtualFile.EMPTY_ARRAY));
+                    cm.make(scope, callback);
                 } else {
                     cm.make(cm.createProjectCompileScope(project), callback);
                 }

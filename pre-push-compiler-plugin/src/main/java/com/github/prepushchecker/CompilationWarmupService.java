@@ -155,7 +155,8 @@ public final class CompilationWarmupService implements Disposable {
                 return;
             }
             VirtualFile[] arr = live.toArray(VirtualFile.EMPTY_ARRAY);
-            cm.compile(arr, (aborted, errorCount, warnings, ctx) -> {
+            com.intellij.openapi.compiler.CompileScope scope = cm.createFilesCompileScope(arr);
+            cm.make(scope, (aborted, errorCount, warnings, ctx) -> {
                 try {
                     if (aborted) return;
                     List<String> result = errorCount > 0
