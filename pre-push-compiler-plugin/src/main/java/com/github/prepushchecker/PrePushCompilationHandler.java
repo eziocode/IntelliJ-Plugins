@@ -11,10 +11,8 @@ import com.intellij.openapi.compiler.CompilerManager;
 import com.intellij.openapi.compiler.CompilerMessage;
 import com.intellij.openapi.compiler.CompilerMessageCategory;
 import com.intellij.openapi.diagnostic.Logger;
-import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressIndicator;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.module.ModuleUtilCore;
+import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vcs.changes.Change;
@@ -212,26 +210,14 @@ public final class PrePushCompilationHandler implements PrePushHandler {
         }
 
         CompilerManager compilerManager = CompilerManager.getInstance(project);
-
-        // Compile at module granularity so that callers of changed APIs (Case 2: A depends on
-        // B, only B pushed) are also recompiled and any breakage is detected.
-        Set<Module> modules = new LinkedHashSet<>();
-        for (VirtualFile file : sourceFiles) {
-            Module module = ModuleUtilCore.findModuleForFile(file, project);
-            if (module != null) {
-                modules.add(module);
-            }
-        }
-
-        CompileScope scope = modules.isEmpty()
-            ? compilerManager.createFilesCompileScope(sourceFiles.toArray(VirtualFile.EMPTY_ARRAY))
-            : compilerManager.createModulesCompileScope(modules.toArray(Module.EMPTY_ARRAY), false);
-
+        // Force javac on the exact pushed set. JPS still pulls in dependents, so A-depends-on-B
+        // breakage is caught — without paying for a whole-module rebuild when the module is huge.
+        VirtualFile[] filesArray = sourceFiles.toArray(VirtualFile.EMPTY_ARRAY);
         return runCompilation(
             project,
             indicator,
             TARGETED_TIMEOUT_MILLIS,
-            notification -> compilerManager.make(scope, notification)
+            notification -> compilerManager.compile(filesArray, notification)
         );
     }
 

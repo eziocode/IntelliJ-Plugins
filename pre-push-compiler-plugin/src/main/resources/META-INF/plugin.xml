@@ -89,7 +89,12 @@
         <postStartupActivity implementation="com.github.prepushchecker.GitHookInstaller"/>
         <postStartupActivity implementation="com.github.prepushchecker.ExternalPushErrorLoader"/>
         <postStartupActivity implementation="com.github.prepushchecker.PrePushLocalServer$Starter"/>
+        <postStartupActivity implementation="com.github.prepushchecker.CompilationWarmupService$Starter"/>
         <projectService serviceImplementation="com.github.prepushchecker.CompilationErrorService"/>
+        <projectService serviceImplementation="com.github.prepushchecker.CompilationWarmupService"/>
+        <registryKey key="prepushchecker.warmup.enabled"
+                     defaultValue="true"
+                     description="Run a debounced background compile of recently saved files so pre-push checks hit the cache and finish instantly."/>
         <notificationGroup id="Pre-Push Compilation Checker"
                            displayType="BALLOON"
                            isLogByDefault="true"/>
@@ -102,5 +107,7 @@
     <applicationListeners>
         <listener class="com.github.prepushchecker.PluginLifecycleListener"
                   topic="com.intellij.ide.plugins.DynamicPluginListener"/>
+        <listener class="com.github.prepushchecker.CompilationWarmupService$SaveListener"
+                  topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
     </applicationListeners>
 </idea-plugin>
