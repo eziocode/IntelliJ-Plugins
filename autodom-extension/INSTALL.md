@@ -56,7 +56,9 @@ For multiple browsers at the same time, run `setup.sh` once per browser with a u
 
 After the script finishes:
 
-1. Open your browser → `chrome://extensions` → Enable **Developer mode** → **Load unpacked** → select the `extension/` folder
+1. Load the extension into your browser:
+   - **Chromium** (Chrome / Edge / Brave / Arc / Ulaa): open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the `extension/` folder
+   - **Firefox**: run `./scripts/build-firefox.sh`, then open `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → select `dist/firefox/manifest.json` (see [Firefox install](#firefox-install) for permanent install)
 2. Pin AutoDOM to the toolbar
 3. **Restart your IDE** so it picks up the new MCP config
 4. Open the AutoDOM popup in the browser → confirm it says **Connected**
@@ -75,11 +77,36 @@ npm install
 
 ### Step 2 — Load the Browser Extension
 
+#### Chromium (Chrome / Edge / Brave / Arc / Ulaa)
+
 1. Go to `chrome://extensions` (or your browser's extensions page)
 2. Enable **Developer mode** (top-right toggle)
 3. Click **Load unpacked**
 4. Select the `extension/` folder inside `autodom-extension`
 5. Pin AutoDOM to the toolbar
+
+#### Firefox install
+
+Firefox needs a Gecko-flavored manifest (event-page background instead of `service_worker`) and only loads a file literally named `manifest.json`. Build it with:
+
+```bash
+./scripts/build-firefox.sh
+```
+
+Outputs:
+
+- `dist/firefox/` — unpacked, ready for *Load Temporary Add-on*
+- `dist/autodom-firefox-<version>.xpi` and `dist/autodom-firefox-latest.xpi`
+
+Install options:
+
+| Goal | Steps |
+|---|---|
+| **Temporary load (any Firefox edition)** | `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `dist/firefox/manifest.json`. Stays loaded until Firefox is closed. |
+| **Permanent on Developer Edition / Nightly / ESR** | `about:config` → set `xpinstall.signatures.required` to `false` → drag `dist/autodom-firefox-latest.xpi` onto `about:addons`. |
+| **Release Firefox** | Submit the XPI to [addons.mozilla.org](https://addons.mozilla.org/developers/) for signing first — release Firefox refuses unsigned add-ons. |
+
+> ⚠ Don't pick `extension/manifest.json` directly in Firefox — it declares a Chromium `service_worker` and will fail with a "background service" error. Always load via the build output.
 
 ### Step 3 — Configure Your IDE
 

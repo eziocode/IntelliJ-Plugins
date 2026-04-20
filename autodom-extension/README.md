@@ -232,7 +232,9 @@ Then:
 
 1. Load the browser extension:
    - **Chromium browsers:** open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the `extension/` folder
-   - **Firefox:** open `about:debugging`, choose **This Firefox**, click **Load Temporary Add-on**, and select `extension/manifest.firefox.json`
+   - **Firefox:** run `./scripts/build-firefox.sh`, then open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on…**, and select `dist/firefox/manifest.json`
+     - For a permanent install on Firefox Developer Edition / Nightly / ESR, set `xpinstall.signatures.required = false` in `about:config` and drag `dist/autodom-firefox-latest.xpi` onto `about:addons`
+     - Release Firefox requires the XPI to be signed via [addons.mozilla.org](https://addons.mozilla.org/developers/) first
 2. Pin AutoDOM to the toolbar
 3. Restart your IDE
 4. Open the AutoDOM popup, set the matching port, then click **Connect** or enable **Auto-connect**
@@ -252,13 +254,39 @@ cd autodom-extension/server
 npm install
 ```
 
-### 2. Load the Chrome extension
+### 2. Load the browser extension
+
+#### Chromium (Chrome / Edge / Brave / Arc / Ulaa)
 
 1. Navigate to `chrome://extensions` (or your browser's equivalent)
 2. Enable **Developer mode** (top-right toggle)
 3. Click **Load unpacked**
 4. Select the `extension/` folder inside `autodom-extension`
 5. Pin the AutoDOM icon to the toolbar
+
+#### Firefox
+
+Firefox needs a Gecko-flavored manifest (event-page background instead of `service_worker`) and only loads a file literally named `manifest.json`. A helper script builds both an unpacked folder and a signed-ready `.xpi`:
+
+```bash
+./scripts/build-firefox.sh
+```
+
+This produces:
+
+- `dist/firefox/` — unpacked, ready for *Load Temporary Add-on*
+- `dist/autodom-firefox-<version>.xpi` — versioned XPI
+- `dist/autodom-firefox-latest.xpi` — convenience copy
+
+Then in Firefox:
+
+| Goal | Steps |
+|---|---|
+| **Temporary load (any Firefox edition, no signing)** | `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `dist/firefox/manifest.json`. Stays loaded until Firefox is closed. |
+| **Permanent install on Developer Edition / Nightly / ESR** | `about:config` → set `xpinstall.signatures.required` to `false` → drag `dist/autodom-firefox-latest.xpi` onto `about:addons` (or use *Install Add-on From File*). |
+| **Release Firefox** | Submit the XPI to [addons.mozilla.org](https://addons.mozilla.org/developers/) for signing — release Firefox refuses unsigned add-ons regardless of how they're installed. |
+
+> ⚠ Selecting `extension/manifest.json` directly will fail in Firefox with a "background service" error because that manifest declares a Chromium `service_worker`. Always load via the build output.
 
 ### 3. Add to your IDE
 
@@ -587,9 +615,12 @@ autodom-extension/
 │   └── icons/
 ├── server/                     # MCP bridge server
 │   ├── index.js                # FastMCP server + WebSocket bridge + SSE + inactivity timeout
+│   ├── cli.js                  # Zero-config CLI entry point (npx autodom-server)
 │   ├── wrapper.js              # Wire-logging wrapper (for debugging)
 │   ├── package.json
-│   └── test-*.js               # Test scripts
+│   └── test/                   # Dev test scripts (e2e, concurrent, crash)
+├── scripts/
+│   └── build-firefox.sh        # Builds dist/firefox/ + signed-ready .xpi
 ├── setup.sh                    # One-click setup script
 ├── INSTALL.md                  # Installation guide
 └── README.md                   # This file
@@ -830,13 +861,13 @@ AutoDOM is designed to be lightweight and efficient. The following optimizations
 cd autodom-extension/server
 
 # End-to-end test (requires Chrome extension to be loaded and connected)
-node test-e2e.cjs
+node test/e2e.cjs
 
 # Concurrent IDE proxy test
-node test-concurrent.cjs
+node test/concurrent.cjs
 
 # Crash resilience test
-node test-crash.js
+node test/crash.js
 ```
 
 ### Wire-protocol debugging
