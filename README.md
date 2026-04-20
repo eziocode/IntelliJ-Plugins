@@ -4,7 +4,7 @@ A collection of productivity-enhancing plugins for JetBrains IDEs.
 
 ## Plugins
 
-### AutoDOM (autodom-extension/)
+### AutoDOM — [github.com/eziocode/autodom-extension](https://github.com/eziocode/autodom-extension)
 AI-powered browser automation through MCP. Connect your IDE's AI agent to a real browser and let it navigate, click, type, screenshot, and inspect — all through natural language. Includes a bridge server, Chrome/Firefox extension, in-browser chat, and 54 automation tools (token-efficient tools, guardrails, SSE transport).
 
 Key features:
@@ -14,7 +14,7 @@ Key features:
 - SSE transport and MCP bridge server
 - Quick setup script and detailed installation instructions
 
-View plugin → autodom-extension/
+> **Moved:** AutoDOM now lives at its own repository → https://github.com/eziocode/autodom-extension
 
 ---
 
