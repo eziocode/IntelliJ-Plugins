@@ -120,3 +120,35 @@ export async function handleAuth(path: string, req: IncomingMessage, res: Server
   }
   page(res, 404, "Not found", "");
 }
+
+// ---------- per-person API keys ----------
+// Issued by the crm_index_keys Catalyst function after a company sign-in, so each person has their own key.
+// Format: k1.<base64url(JSON{email,kid,exp})>.<HMAC-SHA256 with KEY_SECRET>. Revoked key ids are kept in the DB.
+const KEY_SECRET = process.env.KEY_SECRET ?? "";
+const KEY_TTL_MS = Number(process.env.KEY_TTL_DAYS ?? 365) * 86400_000;
+export const keysEnabled = () => !!KEY_SECRET;
+
+export interface KeyClaims { email: string; kid: string; exp: number }
+
+export function verifyKey(token: string, isRevoked: (kid: string) => boolean): { claims?: KeyClaims; reason?: string } | null {
+  if (!KEY_SECRET || !token.startsWith("k1.")) return null;
+  const [, body, mac] = token.split(".");
+  if (!body || !mac) return null;
+  const want = Buffer.from(createHmac("sha256", KEY_SECRET).update(body).digest("base64url"));
+  const got = Buffer.from(mac);
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
+  let c: KeyClaims;
+  try { c = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as KeyClaims; } catch { return null; }
+  if (Date.now() > c.exp) return { reason: "key_expired" };
+  if (isRevoked(c.kid)) return { reason: "key_revoked" };
+  return { claims: c };
+}
+
+/** Used by the key-issuing function's logic (kept here so the format lives in one place). */
+export function mintKeyFor(email: string): { token: string; kid: string; exp: number } {
+  const kid = randomBytes(8).toString("hex");
+  const exp = Date.now() + KEY_TTL_MS;
+  const body = b64u(JSON.stringify({ email, kid, exp } satisfies KeyClaims));
+  const mac = createHmac("sha256", KEY_SECRET).update(body).digest("base64url");
+  return { token: `k1.${body}.${mac}`, kid, exp };
+}

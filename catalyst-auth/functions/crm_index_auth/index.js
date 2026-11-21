@@ -9,6 +9,8 @@ const crypto = require('crypto');
 
 const SECRET = process.env.SESSION_SECRET || '';
 const TTL_MS = Number(process.env.SESSION_TTL_HOURS || 168) * 3600 * 1000;
+// Only this return address may receive a session (the crm-index MCP server's OAuth callback).
+const RETURN_BASE = 'https://crmindex.development.catalystappsail.in/oauth/return';
 const DOMAINS = (process.env.ALLOWED_EMAIL_DOMAINS || 'zohocorp.com').split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -28,7 +30,11 @@ module.exports = async (req, res) => {
     const url = new URL(req.url, `https://${req.headers.host}`);
     const port = Number(url.searchParams.get('port'));
     const state = url.searchParams.get('state') || '';
-    if (!Number.isInteger(port) || port < 1024 || port > 65535 || !/^[\w-]{8,128}$/.test(state)) {
+    // MCP OAuth flow: `return` is the server's /oauth/return URL (fixed prefix only); the session is appended to it.
+    const ret = url.searchParams.get('return') || '';
+    const retOk = ret.startsWith(RETURN_BASE + '?');
+    if (ret && !retOk) return page(res, 400, 'Bad sign-in request', '<p>Unexpected return address.</p>');
+    if (!ret && (!Number.isInteger(port) || port < 1024 || port > 65535 || !/^[\w-]{8,128}$/.test(state))) {
       return page(res, 400, 'Bad sign-in request', '<p>Start sign-in from the crm-index tool.</p>');
     }
 
@@ -47,8 +53,9 @@ module.exports = async (req, res) => {
       return page(res, 403, 'Not allowed', `<p>${esc(email)} is not in an allowed domain (${esc(DOMAINS.join(', '))}).</p>`);
     }
     const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || email;
-    const back = new URL(`http://127.0.0.1:${port}/callback`);
-    back.search = new URLSearchParams({ token: mint(email, name), state, email }).toString();
+    const back = ret ? new URL(ret) : new URL(`http://127.0.0.1:${port}/callback`);
+    const params = { token: mint(email, name), state: ret ? (url.searchParams.get('state') || '') : state, email };
+    for (const [k, v] of Object.entries(params)) back.searchParams.set(k, v);
     console.log(`[auth] signed in ${email}`);
     res.writeHead(302, { Location: back.toString(), 'Cache-Control': 'no-store' });
     res.end();

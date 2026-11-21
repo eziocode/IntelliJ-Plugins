@@ -14,7 +14,8 @@ import { diffSymbols } from "./diff.js";
 import { changeSummary, formatDiffSymbols, formatSummary } from "./summary.js";
 import { coverageGap, formatGap, type GapKind } from "./gap.js";
 import { covConfigFromEnv, ingestJsReport } from "./coverage.js";
-import { handleAuth, loginEnabled, loginTarget, verifySession } from "./auth.js";
+import { handleAuth, keysEnabled, loginEnabled, loginTarget, verifyKey, verifySession } from "./auth.js";
+import { handleOAuth, resourceMetadataUrl } from "./oauth.js";
 import { capacity } from "./branches.js";
 import { snapshotInWorker } from "./indexPool.js";
 import { snapshotEnabled } from "./snapshot.js";
@@ -41,6 +42,20 @@ const repos = new Map<string, Repo>();
   if (!repos.size) { console.error("REPOS (name=path[,name=path]) or REPO_DIR is required"); process.exit(1); }
 }
 const defaultRepo = [...repos.keys()][0];
+// revoked per-person key ids live in the index DB, so a revocation survives restarts
+const isKeyRevoked = (kid: string): boolean => !!repos.get(defaultRepo)!.db.prepare("SELECT 1 FROM meta WHERE k=?").get(`revoked:${kid}`);
+/** Who is calling: "admin", a signed-in email, a key owner's email, or null (not allowed). */
+const identify = (bearer: string): { user: string } | { error: string } | null => {
+  if (TOKEN && bearer === TOKEN) return { user: "admin" };
+  const k = bearer ? verifyKey(bearer, isKeyRevoked) : null;
+  if (k?.claims) return { user: k.claims.email };
+  if (k?.reason) return { error: k.reason };
+  const v = bearer ? verifySession(bearer) : null;
+  if (v?.session) return { user: v.session.email };
+  if (v?.expired) return { error: "session_expired" };
+  return null;
+};
+const authRequired = () => !!TOKEN || keysEnabled() || loginEnabled();
 const cov = covConfigFromEnv();
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
@@ -251,6 +266,13 @@ async function handleApi(path: string, req: IncomingMessage, res: import("node:h
     try { return json(res, 200, { snapshot: await snapshotInWorker(r.db, r.name) }); } catch (e) { return json(res, 500, { ok: false, error: (e as Error).message }); }
   }
 
+  if (path === "/api/admin/revoke" && req.method === "POST") {
+    if (!isAdmin) return json(res, 403, { ok: false, error: "admin only" });
+    const kid = String(b.kid ?? "");
+    if (!/^[0-9a-f]{16}$/.test(kid)) return json(res, 400, { ok: false, error: "kid must be 16 hex chars" });
+    repos.get(defaultRepo)!.db.prepare("INSERT OR REPLACE INTO meta(k,v) VALUES (?,?)").run(`revoked:${kid}`, String(Date.now()));
+    return json(res, 200, { ok: true, revoked: kid });
+  }
   return json(res, 404, { ok: false, error: `no route ${req.method} ${path}` });
 }
 
@@ -259,18 +281,17 @@ const http = createServer(async (req, res) => {
     if (req.url === "/health") { res.writeHead(200).end("ok"); return; }
     const path = req.url?.split("?")[0] ?? "";
     if (path.startsWith("/auth/")) { await handleAuth(path, req, res); return; }
+    if (path.startsWith("/oauth/") || path.startsWith("/.well-known/")) { if (await handleOAuth(path, req, res)) return; }
     if (path.startsWith("/api/")) {
       // admin key (MCP_TOKEN) or a Zoho sign-in session minted by /auth/callback
       const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
       let user = "";
-      if (TOKEN && bearer === TOKEN) user = "admin";
-      else {
-        const v = bearer ? verifySession(bearer) : null;
-        if (v?.session) user = v.session.email;
-        else if (TOKEN || loginEnabled()) {
-          json(res, 401, { ok: false, error: v?.expired ? "session_expired" : "login_required", login: loginEnabled() ? loginTarget() : null });
-          return;
-        }
+      const who = identify(bearer);
+      if (who && "user" in who) user = who.user;
+      else if (authRequired()) {
+        const reason = who && "error" in who ? who.error : "login_required";
+        json(res, 401, { ok: false, error: reason, login: loginEnabled() ? loginTarget() : null, keys: keysEnabled() ? "send your personal key as Bearer" : null });
+        return;
       }
       if (path === "/api/whoami") { json(res, 200, { ok: true, user: user || "anonymous" }); return; }
       if (user && user !== "admin") console.error(`[api] ${user} ${req.method} ${path}`);
@@ -278,7 +299,11 @@ const http = createServer(async (req, res) => {
       return;
     }
     if (req.url?.split("?")[0] !== "/mcp") { res.writeHead(404).end(); return; }
-    if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) { res.writeHead(401).end("unauthorized"); return; }
+    const mcpWho = identify((req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""));
+    if (authRequired() && !(mcpWho && "user" in mcpWho)) {
+      res.writeHead(401, { "content-type": "application/json", "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl()}"` }).end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: send a personal key as Bearer" }, id: null }));
+      return;
+    }
     // Default (MCP_STATEFUL=1 to disable): no sessions. Every request is self-contained and answered as plain JSON, which avoids the
     // session path that the AppSail gateway mishandles (duplicate empty 400s on /mcp).
     if (process.env.MCP_STATEFUL !== "1") {
