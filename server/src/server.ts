@@ -140,7 +140,7 @@ function buildServer(session: Session): McpServer {
     return text(out.join("\n"));
   });
 
-  // ---------- QA tools ----------
+  // ---------- diff ----------
   const range = {
     base: z.string().optional().describe(`Base branch (default ${BASE}); the diff is merge-base(base, head)..head`),
     head: z.string().optional().describe("Head branch (default: active branch)"),
@@ -157,59 +157,10 @@ function buildServer(session: Session): McpServer {
     return text(formatDiffSymbols(diffSymbols(r.db, r.dir, b, h), 80));
   }));
 
-  srv.registerTool("change_summary", {
-    description: "Structured facts about a branch change: commits (sha+subject), files by status/type, modules touched, symbol counts, added/removed public Java API, tests touched, largest changes. Cross-check the developer's check-in description against this.",
-    inputSchema: range,
-  }, async ({ base, head, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const b = base ?? BASE, h = active(r, head);
-    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
-    return text(formatSummary(changeSummary(r.db, r.dir, b, h)));
-  }));
 
-  srv.registerTool("compare_description", {
-    description: "Heuristically compare a developer's check-in description with the actual diff: identifiers named but absent from the diff, and modules changed but never mentioned. Heuristic only; verify flagged items by hand.",
-    inputSchema: { description: z.string().min(5), ...range },
-  }, async ({ description, base, head, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const b = base ?? BASE, h = active(r, head);
-    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
-    return text(formatDescriptionCheck(compareDescription(diffSymbols(r.db, r.dir, b, h), description)));
-  }));
 
-  srv.registerTool("ingest_coverage", {
-    description: "Register/refresh a coverage report. kind=js pulls the JS coverage API (needs server-side credentials) and stores missed ranges with branch+commit. kind=jacoco records the report's branch/commit so coverage_gap can gate on it (Java line data is fetched lazily per file).",
-    inputSchema: { kind: z.enum(["js", "jacoco"]), report: z.string().regex(SAFE_ID), branch: z.string().optional(), commit: z.string().regex(SHA).optional(), refresh: z.boolean().optional(), repo: repoArg },
-  }, async ({ kind, report, branch, commit, refresh, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    if (kind === "js") {
-      const m = await ingestJsReport(r.db, cov, report, refresh ?? false);
-      return text(`js report ${report}: branch=${m.branch ?? "?"} commit=${m.commit?.slice(0, 10) ?? "?"} build=${m.build ?? "?"} missed-case ranges=${m.total}`);
-    }
-    r.db.prepare("INSERT OR REPLACE INTO cov_report VALUES (?,?,?,?,?,?)").run(report, "jacoco", branch ?? null, commit ?? null, new Date().toISOString(), "{}");
-    return text(`jacoco report ${report} registered: branch=${branch ?? "?"} commit=${commit?.slice(0, 10) ?? "none (pass commit for the commit gate)"}`);
-  }));
 
-  srv.registerTool("coverage_gap", {
-    description: "Which CHANGED lines/methods no test executed, per a coverage report. Computes changed lines from git (not from the developer), maps them onto the report, and gates on the report's commit: files that differ between the report's commit and head are flagged unverifiable. Set at_report_commit=true to evaluate exactly at the report's commit. Cross-checks the JS tool's own missed list.",
-    inputSchema: { kind: z.enum(["js", "jacoco"]), report: z.string().regex(SAFE_ID), report_commit: z.string().regex(SHA).optional(), at_report_commit: z.boolean().optional(), ...range },
-  }, async ({ kind, report, report_commit, at_report_commit, base, head, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const b = base ?? BASE, h = active(r, head);
-    await ensureReady(r.db, r.dir, h);
-    const res = await coverageGap(r.db, r.dir, cov, { base: b, head: h, kind: kind as GapKind, report, reportCommit: report_commit, atReportCommit: at_report_commit });
-    return text(formatGap(res));
-  }));
 
-  srv.registerTool("impact_tests", {
-    description: "Likely-affected tests for a change. METHOD: lexical identifier match between changed symbols and test files in this repo, plus QA scenario text from previously ingested coverage reports on overlapping lines. There is NO per-test coverage, so this is a guess and says so; if the repo has no tests, QA automation lives elsewhere.",
-    inputSchema: range,
-  }, async ({ base, head, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const b = base ?? BASE, h = active(r, head);
-    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
-    return text(formatImpact(await impactTests(r.db, r.dir, b, h)));
-  }));
 
   return srv;
 }
