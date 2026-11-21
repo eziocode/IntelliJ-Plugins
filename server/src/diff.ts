@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import { unpackText } from "./db.js";
 import { execFileSync } from "node:child_process";
 
 const gitOut = (repo: string, args: string[]) =>
@@ -64,7 +65,7 @@ const TYPE_KINDS = new Set(["class", "interface", "enum", "record", "annotation_
 
 export function symbolsAt(db: Db, ref: string, path: string | null): SymRow[] {
   if (!path) return [];
-  return db.prepare("SELECT s.id,s.kind,s.parent,s.name,s.sig,s.sl,s.el FROM manifest m JOIN symbols s ON s.blob=m.blob WHERE m.ref=? AND m.path=? ORDER BY s.sl").all(ref, path) as SymRow[];
+  return (db.prepare("SELECT s.id,s.kind,s.parent,s.name,s.sig,s.sl,s.el FROM v_manifest m JOIN symbols s ON s.blob_id=m.blob_id WHERE m.ref=? AND m.path=? ORDER BY s.sl").all(ref, path) as SymRow[]).map((r) => ({ ...r, sig: unpackText(r.sig) }));
 }
 
 /** Innermost symbol containing line: prefer members over their enclosing type. Type-only hit => class-level code (fields/constants). */

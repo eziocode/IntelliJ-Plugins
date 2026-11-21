@@ -1,5 +1,6 @@
 import type { Db } from "./db.js";
 import { queryTokens, tokenize } from "./tokens.js";
+import { unpackText } from "./db.js";
 
 export interface Card {
   id: string; kind: string; symbol: string; path: string; lines: string; sig: string; doc: string; score: number;
@@ -12,18 +13,18 @@ export function parseId(id: string): { rowid: number; blob5: string } | null {
 }
 
 const SQL = `
-  SELECT s.id, s.blob, s.kind, s.parent, s.name, s.sl, s.el, s.sig, s.doc, m.path,
+  SELECT s.id, m.blob AS blob, s.kind, s.parent, s.name, s.sl, s.el, s.sig, s.doc, m.path,
          bm25(symbols_fts, 10.0, 3.0, 3.0, 1.0) AS score
   FROM symbols_fts f
   JOIN symbols s ON s.id = f.rowid
-  JOIN manifest m ON m.blob = s.blob AND m.ref = ?
+  JOIN v_manifest m ON m.blob_id = s.blob_id AND m.ref = ?
   WHERE symbols_fts MATCH ?
   ORDER BY score LIMIT ?`;
 
 interface Row { id: number; blob: string; kind: string; parent: string; name: string; sl: number; el: number; sig: string; doc: string; path: string; score: number }
 
 function run(db: Db, ref: string, match: string, limit: number): Row[] {
-  return db.prepare(SQL).all(ref, match, limit) as Row[];
+  return (db.prepare(SQL).all(ref, match, limit) as Row[]).map((r) => ({ ...r, sig: unpackText(r.sig), doc: unpackText(r.doc) }));
 }
 
 const OR_POOL = 200;

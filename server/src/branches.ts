@@ -1,6 +1,14 @@
 import type { Db } from "./db.js";
 import { git } from "./git.js";
 import { gitRefOf } from "./diff.js";
+import { enforceBudget, touchRef } from "./evict.js";
+import { pruneRemoteRef } from "./git.js";
+
+/** Index size budget (MiB of used SQLite pages). Least-recently-used branches are dropped beyond it. */
+export const BUDGET_BYTES = Number(process.env.INDEX_BUDGET_MB ?? 500) * 1048576;
+/** Also delete the mirror blobs of dropped branches (git gc). Off by default: gc is slow on a big mirror. */
+export const PRUNE_MIRROR = process.env.PRUNE_MIRROR === "1";
+export const evictionLog: string[] = [];
 import { indexRef, type IndexReport } from "./indexer.js";
 
 export const BASE = "master";
@@ -26,12 +34,12 @@ export function listBranches(db: Db, repo: string, contains = "", limit = 25, us
   }
   const needle = contains.toLowerCase();
   const matched = needle ? all.filter((b) => b.name.toLowerCase().includes(needle)) : all;
-  const indexed = new Set((db.prepare("SELECT DISTINCT ref FROM manifest").all() as { ref: string }[]).map((r) => r.ref));
+  const indexed = new Set((db.prepare("SELECT r.name AS ref FROM refs r WHERE EXISTS (SELECT 1 FROM manifest m WHERE m.ref_id = r.id)").all() as { ref: string }[]).map((r) => r.ref));
   return { total: all.length, matched: matched.length, branches: matched.slice(0, limit).map((b) => ({ ...b, indexed: indexed.has(b.name) })) };
 }
 
 export function isIndexed(db: Db, ref: string): boolean {
-  return !!db.prepare("SELECT 1 FROM manifest WHERE ref=? LIMIT 1").get(ref);
+  return !!db.prepare("SELECT 1 FROM manifest m JOIN refs r ON r.id = m.ref_id WHERE r.name = ? LIMIT 1").get(ref);
 }
 
 type Job = { ref: string; state: "queued" | "running" | "done" | "error"; startedAt: number; report?: IndexReport; error?: string; promise: Promise<void> };
@@ -65,6 +73,12 @@ export function ensureIndexed(db: Db, repo: string, branch: string, opts: { refr
       }
       job.report = await indexRef(db, repo, gitRefOf(branch), undefined, branch);
       job.state = "done";
+      touchRef(db, branch);
+      for (const d of enforceBudget(db, BUDGET_BYTES, new Set([branch]), BASE)) {
+        let note = `evicted ${d} (over ${process.env.INDEX_BUDGET_MB ?? 500} MiB)`;
+        if (PRUNE_MIRROR && !d.startsWith("commit:")) { const r = pruneRemoteRef(repo, d); note += r.removed ? `, mirror pruned in ${r.gcMs}ms` : ""; }
+        evictionLog.push(note);
+      }
     } catch (e) {
       job.state = "error";
       job.error = (e as Error).message.split("\n")[0];

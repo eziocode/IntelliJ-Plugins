@@ -6,7 +6,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { openDb, type Db } from "./db.js";
-import { BASE, ensureIndexed, ensureReady, isIndexed, isIndexing, jobStatus, listBranches, waitFor } from "./branches.js";
+import { BASE, ensureIndexed, ensureReady, evictionLog, isIndexed, isIndexing, jobStatus, listBranches, waitFor, BUDGET_BYTES } from "./branches.js";
+import { touchRef, usedBytes } from "./evict.js";
 import { formatCards, searchSymbols } from "./search.js";
 import { getSymbol } from "./symbol.js";
 import { diffSymbols } from "./diff.js";
@@ -67,6 +68,7 @@ function buildServer(session: Session): McpServer {
     const r = pick(repo); if (typeof r === "string") return text(r, true);
     const b = active(r, branch);
     if (!isIndexed(r.db, b)) return text(`Branch "${b}" is not indexed yet in ${r.name}. Call switch_branch("${b}") first.`, true);
+    touchRef(r.db, b);
     const { cards, mode } = searchSymbols(r.db, b, query, limit ?? 8, path);
     if (!cards.length) return text(`No symbols matched on ${r.name}:${b}. Try fewer or different keywords.`);
     return text(`repo=${r.name} branch=${b} match=${mode} results=${cards.length}${isIndexing(r.dir, b) ? "\nWARNING: this branch is still being indexed; results may be incomplete. Check index_status." : ""}\n${formatCards(cards)}`);
@@ -126,13 +128,14 @@ function buildServer(session: Session): McpServer {
   }, async () => {
     const out: string[] = [`session repo: ${session.repo}`];
     for (const r of repos.values()) {
-      const refs = r.db.prepare("SELECT ref, COUNT(*) files FROM manifest WHERE ref NOT LIKE 'commit:%' GROUP BY ref ORDER BY ref").all() as { ref: string; files: number }[];
+      const refs = r.db.prepare("SELECT ref, COUNT(*) files FROM v_manifest WHERE ref NOT LIKE 'commit:%' GROUP BY ref ORDER BY ref").all() as { ref: string; files: number }[];
       const n = (r.db.prepare("SELECT COUNT(*) c FROM symbols").get() as { c: number }).c;
       out.push(`[${r.name}] active branch: ${session.branches[r.name] ?? BASE}  symbols: ${n}  db: ${(statSync(r.file).size / 1048576).toFixed(0)} MiB`);
       for (const x of refs.slice(0, 30)) out.push(`  ${x.ref}  ${x.files} files`);
     }
     const js = jobStatus().filter((j) => j.state !== "done");
     out.push(js.length ? `jobs: ${js.map((j) => `${j.ref}=${j.state}${j.error ? `(${j.error})` : ""}`).join(", ")}` : "jobs: none");
+    out.push(`index budget: ${BUDGET_BYTES / 1048576} MiB; eviction log: ${evictionLog.slice(-5).join(" | ") || "none"}`);
     out.push(`coverage sources: jacoco=${cov.jacocoBase ? "configured" : "not configured"} js=${cov.jsBase || cov.fixtureDir ? "configured" : "not configured"}`);
     return text(out.join("\n"));
   });
@@ -252,4 +255,7 @@ const http = createServer(async (req, res) => {
 http.listen(PORT, () => {
   console.error(`crm-index MCP on :${PORT}/mcp  repos=${[...repos.values()].map((r) => `${r.name}=${r.dir}`).join(",")}  data=${DATA}`);
   for (const r of repos.values()) if (!isIndexed(r.db, BASE)) { console.error(`${r.name}: master not indexed, starting initial index`); ensureIndexed(r.db, r.dir, BASE, { fetch: false }); }
+  // PRELOAD_REFS=refs... (comma-separated branch names) are indexed in the background at boot, e.g. the team's default branches
+  const preload = (process.env.PRELOAD_REFS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  for (const r of repos.values()) for (const b of preload) if (!isIndexed(r.db, b)) { console.error(`${r.name}: preloading ${b}`); ensureIndexed(r.db, r.dir, b); }
 });

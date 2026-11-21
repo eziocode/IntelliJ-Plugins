@@ -69,3 +69,14 @@ export async function prefetchBlobs(repo: string, shas: string[], chunk = 2000):
   }
   return { requested: miss.length, ok };
 }
+
+/** Drop a branch's remote-tracking ref and let git prune the blobs only it needed (partial clone: they are re-fetchable). */
+export function pruneRemoteRef(repo: string, branch: string): { removed: boolean; gcMs: number } {
+  const ref = `refs/remotes/origin/${branch}`;
+  if (branch === "master") return { removed: false, gcMs: 0 };
+  try { execFileSync("git", ["-C", repo, "update-ref", "-d", ref], { env: GIT_ENV }); } catch { return { removed: false, gcMs: 0 }; }
+  const t0 = Date.now();
+  execFileSync("git", ["-C", repo, "reflog", "expire", "--expire=now", "--all"], { env: GIT_ENV });
+  execFileSync("git", ["-C", repo, "gc", "--prune=now", "--quiet"], { env: GIT_ENV, maxBuffer: 1 << 26 });
+  return { removed: true, gcMs: Date.now() - t0 };
+}

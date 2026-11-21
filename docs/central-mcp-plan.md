@@ -233,3 +233,92 @@ Coverage config (env, server-side only; tools never accept URLs): `COVERAGE_JACO
 ## Next
 - Phase 4: auth (Zoho SSO -> repo access), webhooks / polling, AppSail or internal-host deploy (Phase 0 spike still outstanding), master auto-refresh, branch eviction.
 - Add coverage fixtures to a committed test directory (currently `server/scratch/`, gitignored) and a small automated test suite.
+
+---
+
+# J. PHASE 0 RESULTS: Catalyst AppSail spike (Development env of project CrmQaAutomation, India DC)
+
+Throwaway managed-runtime (node22) app `crmindexspike`, token-protected, probes in `server/spike/appsail-probe.js`. Deployed with the Catalyst CLI (no Docker needed). Baseline from a Mac inside the network: every target reachable.
+
+| Question | Result from AppSail |
+|---|---|
+| `git` available? | **Yes**, `git 2.43.0` in the managed runtime |
+| Runtime | linux/x64, node 22, 2 CPUs, uid 1001 |
+| Memory | default **256 MB** (`X_ZOHO_CATALYST_RUNTIME_MEMORY`); configurable up to 2048 MB (docs) |
+| Disk | **~250 MB** hard limit (ENOSPC at 242 MB) on both `/catalyst` and `/tmp`. An existing AppSail in this project shows a `disk` setting of 1024 MB, so it is configurable; our need (mirror ~343 MB + blobs ~450 MB + index ~150 MB) is ~1-2 GB |
+| Persistence | **Ephemeral.** A redeploy wiped both `/tmp` and `/catalyst` (state from the earlier deploy was gone). Plain-restart behaviour not separately tested; assume ephemeral |
+| Repo host `zrepository.zohocorpcloud.in` | **Reachable** (TLS ok, `401` without credentials) |
+| Public internet | Reachable |
+| JS coverage tool (`crmqa-u24-23...:443`) | DNS resolves to **public** IPs; TCP 443 open; TLS handshake **requires a client certificate** (`CERTIFICATE_REQUIRED`) and the CA is not trusted. **Not callable from AppSail without a client cert** |
+| JaCoCo / impact tool (`crmqa19...:8085`) | **TCP timeout** from AppSail (port blocked/unrouted); 80 refused; 443 open but unverified |
+| Request duration | Silent long requests get **HTTP 408 at ~33-40 s**; even a streaming (SSE-style, bytes every 5 s) response is **cut at ~46 s**. Every MCP tool call must finish in < ~30 s; our 25 s wait fits. A long-lived SSE GET channel would be cut every ~45 s (we use no server-initiated notifications) |
+| Instances | Sequential calls hit one process (same pid, hit counter 1..6): single instance at low load. Autoscaler allows up to 5; pinning to 1 not verified |
+| Port | `X_ZOHO_CATALYST_LISTEN_PORT=9000` (server currently reads `PORT`) |
+
+## Verdict
+- **AppSail can host the index and MCP server**, if configured with >= 1 GB disk, 1-2 GB memory, a single instance, and every call < 30 s.
+- **AppSail cannot reach the coverage tools** (client-cert gate on 443; 8085 blocked). That breaks `coverage_gap` live ingestion from Catalyst. Options: (a) host the MCP on an internal VM that can reach them; (b) have the coverage tool team expose a token-based API through a gateway AppSail can reach / issue a client cert; (c) push coverage reports into the server (an uploader job or the tool's `callback_url` hook) instead of pulling; (d) split: Catalyst hosts search, an internal worker feeds coverage.
+- **Cold starts need a restore step**: ephemeral disk means every deploy/restart restores the SQLite + mirror from Stratus (or reclones ~343 MB + re-indexes ~45 s, which also needs repo credentials at runtime and the bigger disk).
+- Hardcoded `PORT` -> must honour `X_ZOHO_CATALYST_LISTEN_PORT`.
+
+## Cleanup status
+Spike AppSail `crmindexspike` was created in CrmQaAutomation / Development and should be deleted once reviewed (Console -> AppSail), together with the local `.catalystrc` scratch folder.
+
+---
+
+# K. STORAGE COMPRESSION + DYNAMIC DEPLOYMENT (schema v4; code in `server/`)
+
+AppSail config confirmed: **2048 MB memory, 1024 MB disk** (Development, `crmindexspike`).
+
+## K1. Index size, measured on the same refs (master, two branches, one coverage commit)
+| Step | Index size | Recall@10 / MRR (seed eval) |
+|---|---|---|
+| v2 (text SHAs in every row, full FTS incl. paths and docs) | **277 MB** (earlier run, same refs minus the coverage commit) | 1.0 / 0.871 |
+| v3: blobs/paths/refs as dictionary tables, `v_manifest` view | 194 MB | 1.0 / 0.871 |
+| FTS without doc tokens | 191 MB | 1.0 / 0.893 |
+| FTS without path tokens (paths repeat on every symbol row) | 171 MB | 1.0 / **0.901** |
+| No `symbols(name)` index (one GROUP BY for impact) | 156 MB | 1.0 / 0.901 |
+| Shared zlib dictionary for signatures/docs (`src/zdict.bin`) | **139 MB** | 1.0 / 0.901 |
+| + **compressed bodies** (`bodies` table, get_symbol without git) | 285 MB live, incl. ~131 MB bodies for 28k blobs | 1.0 / 0.901 |
+
+Tried and rejected: `detail=none` on FTS (positions gone, bm25 loses term frequency: recall fell to 0.57).
+
+Bodies: all master code bodies are 404 MiB raw and **83 MiB** deflated (ratio 0.21). That is what makes the mirror removable from the serving path.
+
+## K2. Where the disk actually goes (the real constraint on 1 GB)
+- Full all-branches blobless mirror: **521 MB** (`.git`). Dominated by 17,879 branches' trees and commits. Not viable on 1 GB.
+- **Master-only blobless mirror: 147 MB** (measured, `clone --bare --filter=blob:none --single-branch`). Use this.
+- Index: 139 MB (no bodies) to 285 MB (with bodies, 4 refs). Budgeted by `INDEX_BUDGET_MB` (default 500).
+- Snapshot: 137 MB raw / 57 MB gz without bodies; **283 MB raw / 190 MB gz with bodies (4 refs)**.
+- Peak disk during a cold-start restore is roughly gz + raw index: ~480 MB at 4 refs. Fits 1 GB.
+- Pruning a branch's mirror refs reclaims little (17 MB for a 34-blob branch, 30 s gc). It matters only at scale; it also deletes unreferenced commits (e.g. the coverage report commit), which are refetched on demand.
+
+## K3. Deployment strategy (chosen, and why)
+1. **Serve from the index, not the mirror.** `get_symbol` reads `bodies`; the mirror is only needed to index new blobs. So a restart needs the snapshot, not a clone.
+2. **Cold start = restore, then serve** (`deploy/boot.sh`): if no index, restore from `SNAPSHOT_GZ` (local) or `SNAPSHOT_URL` (signed GET from Stratus); otherwise index master from the mirror. Verified locally: healthy in ~2 s after restore, and results match the pre-restore index.
+3. **Periodic snapshot** (`deploy/snapshot.sh`): `VACUUM INTO` (consistent while serving), gzip, optional signed PUT to Stratus, keep last N. Run from a Catalyst cron or after a big reindex.
+4. **Dynamic branch residency:** branches are indexed on `switch_branch`; when the index exceeds the budget, the least-recently-used branch is dropped (`enforceBudget`), with its exclusive symbols, FTS rows, bodies and blobs garbage-collected. Verified: FTS rows stay in sync with symbols after each drop. Shared blobs are never removed while another ref uses them.
+5. **Preload:** `PRELOAD_REFS=<branch,branch>` indexes a bounded set at boot in the background.
+6. **Single instance, single writer.** The AppSail autoscaler can run up to 5; that breaks the per-session branch state and the SQLite single writer. Pin to 1 (not yet verified as configurable).
+7. **Mirror policy on the host:** master-only blobless clone. Branch tracking refs are fetched per branch; `PRUNE_MIRROR=1` (and `cli prune`) removes a dropped branch's refs and runs gc.
+
+## K4. Config (env)
+| Var | Default | Meaning |
+|---|---|---|
+| `INDEX_BUDGET_MB` | 500 | used-page budget for the index; LRU branch eviction beyond it |
+| `PRELOAD_REFS` | (none) | branches indexed at boot |
+| `PRUNE_MIRROR` | 0 | prune mirror refs of evicted branches (gc, slow on big mirrors) |
+| `SNAPSHOT_GZ` / `SNAPSHOT_URL` | (none) | cold-start restore source |
+| `FTS_DOC`, `FTS_PATH` | 0, 0 | put doc / path tokens into FTS (cost size; off is better for ranking) |
+| `DB_FILE`, `REPO_NAME` | `data/zohocrm.sqlite` | index file name (same name in CLI and server) |
+
+## K5. Risks / open items
+- **Snapshot size grows with bodies** (190 MB gz at 4 refs). Restore time on AppSail is unmeasured. A master-only snapshot is likely ~110 MB gz (estimated, not measured). Consider compressing bodies with the shared dictionary, or storing bodies only for master + pinned branches.
+- **Eviction can drop a branch a session is using.** The session then gets "not indexed yet" and must `switch_branch` again. No in-use tracking yet.
+- **Restore peak disk** is roughly gz + raw index. Must be verified on the real 1 GB host.
+- **Blocking indexer:** a large branch index still runs on the main thread and can stall requests for ~25-50 s. Move indexing to a worker thread before multi-user use.
+- **`commit:` refs** are not in the mirror after a prune; they must be refetched with `ensureIndexed` (verified: `diff_symbols` on a pruned branch re-fetched and re-indexed it in ~3 s).
+- Dictionary `zdict.bin` is part of the format: changing it means a full re-index.
+
+## K6. Files
+`server/src/db.ts` (v4 schema, packing), `src/indexer.ts`, `src/symbol.ts` (reads bodies), `src/evict.ts` (LRU budget, GC), `src/git.ts` (`pruneRemoteRef`), `src/cli.ts` (`snapshot`, `restore`, `prune`, `mkdict`), `src/zdict.bin`, `deploy/boot.sh`, `deploy/snapshot.sh`.

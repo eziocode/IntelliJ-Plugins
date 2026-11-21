@@ -24,18 +24,19 @@ export async function impactTests(db: Db, repo: string, base: string, head: stri
 
   // terms: weight 3 = changed file's class name, weight 1 = changed symbol names that are not generic
   const terms = new Map<string, number>();
-  const freq = db.prepare("SELECT COUNT(*) c FROM symbols WHERE name=?");
+  // one scan instead of an index on symbols(name) (the index cost ~14 MB and only this tool needs it)
+  const freqMap = new Map((db.prepare("SELECT name, COUNT(*) c FROM symbols GROUP BY name").all() as { name: string; c: number }[]).map((r) => [r.name, r.c]));
   for (const s of diff.symbols) {
     if (testRe.test(s.path) || s.status === "class_level") continue;
     const stem = s.path.replace(/^.*\//, "").replace(/\.[^.]+$/, "");
     if (stem.length >= 5) terms.set(stem, Math.max(terms.get(stem) ?? 0, 3));
     const nm = s.symbol.split(".").pop()!;
     if (nm.length < 6 || terms.has(nm)) continue;
-    if ((freq.get(nm) as { c: number }).c > GENERIC_MAX) continue;
+    if ((freqMap.get(nm) ?? 0) > GENERIC_MAX) continue;
     terms.set(nm, 1);
   }
 
-  const testPaths = (db.prepare("SELECT path, blob FROM manifest WHERE ref=?").all(head) as { path: string; blob: string }[])
+  const testPaths = (db.prepare("SELECT path, blob FROM v_manifest WHERE ref=?").all(head) as { path: string; blob: string }[])
     .filter((r) => testRe.test(r.path) && /\.(java|js|mjs|cjs)$/.test(r.path)).slice(0, 5000);
   const need = testPaths.filter((t) => !idCache.has(t.blob));
   if (need.length) {
