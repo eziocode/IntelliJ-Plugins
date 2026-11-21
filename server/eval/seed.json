@@ -1,0 +1,19 @@
+{
+  "note": "SEED set: expected answers were derived from symbol names seen in the index, so it is optimistic. Replace/extend with real QA/dev questions.",
+  "cases": [
+    { "q": "mxn field patch value in canvas detail page", "name": "mxnFieldPatchValue" },
+    { "q": "populate related entry for MXN field after custom module post event", "name": "populateMXNFieldRelatedEntry" },
+    { "q": "subform field properties setup for layout field", "name": "setSubformFieldProperties" },
+    { "q": "set up picklist properties module builder", "name": "setupPickListProperties" },
+    { "q": "validate api name for custom button", "name": "validateApiName", "path": "CustomButtonUtil" },
+    { "q": "validate api name payload when creating custom field", "name": "Post_validateAndSetProperty_api_name" },
+    { "q": "close crux criteria editor", "name": "mb_closeCruxCriteriaEditor" },
+    { "q": "address child sub label for composite field", "name": "mb_getAddressChildSubLabel" },
+    { "q": "change modules layout page features", "name": "changeModulesLayoutPage" },
+    { "q": "disable field property module builder mixin", "name": "disableFieldProp", "path": "crm-module-builder-field-prop-mixin" },
+    { "q": "enable or disable field prop", "name": "enableDisableFieldProp" },
+    { "q": "construct lists relation for mxn field event listener", "name": "constructListsRelationForMxn" },
+    { "q": "is mxn dummy relation field related data", "name": "isMxnDummyRelationField" },
+    { "q": "get mxn related ids for module", "name": "getMXNRelatedIds" }
+  ]
+}

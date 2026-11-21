@@ -1,0 +1,204 @@
+# Central CRM Index MCP — findings + phased plan (DRAFT, awaiting approval)
+
+## A. Findings from the two coverage tools
+
+### Link 1 — "Coverage report" (crmqa-u24-23 .../coverage/6092/report/8539)
+- **Scope: JavaScript (frontend) coverage**, `type: "JS"`, repo `zohocrm`. Build label `APINAME_INCLUSION_MODULE_BUILDER_Nov_16_2026`. Not Java.
+- **Granularity: file + line range** (no method/class/package). Page lists files with "Missed Cases": `javascript/CrmModuleBuilder.js (51)` -> `Line (77260 - 77270)` ... Total 92 missed cases.
+- Tracks "Modified" lines only (`track_coverage.track = "Modified"`). So it is already a *diff-scoped* report: missed = changed-but-unexecuted ranges.
+- QA workflow is baked in: each missed case has `category` (Functional / Other / Not_Related_To_My_Workitem_Code), `status` (Covered / No Need To Cover / null), `description` (QA's manual scenario text), `commits[]` (short commit ids per case), `DI_description` (AI description), `hash_value`, `compressed_file`/`path` (link to annotated HTML).
+- **Branch + commit recorded:** `impact_coverage.branch` = `APINAME_INCLUSION_MODULE_BUILDER`, `end_changeset` = full 40-char git SHA, `start_changeset` empty, `compare_branch` null, `master_merged` flag, `modified_lines` 1513, `added_files` 0.
+- **API (same origin, JSON, 200):**
+  - `GET /api/coverage/{projectId=6092}/report` -> `{status, coverage:{id,type,status,instance,build_id,build_label,impact,track_coverage,impact_coverage:{id,status,branch,compare_branch,start_changeset,end_changeset,master_merged,modified_lines,modified_files,added_files,...}, started_by/on, ...}}`
+  - `GET /api/coverage/6092/report/{reportId}` -> `{status, report:{id,status,coverage(number %), generated_on, verified_by/on, coverage_report:{...same as above}}}`
+  - `GET /api/coverage/6092/report/{reportId}/case` -> `{status, report:{..., cases:[{id,file,start,end,path,hash_value,compressed_file,category,description,status,comments,hide,DI_description,repo,commits:[{commit_id,user}]}]}}` (92 items)
+  - Also `/api/auth/session` (NextAuth-style; browser session cookie). Direct calls worked from the logged-in browser; **not tested without cookie** -> assume SSO/session auth needed. Service account/token needs to be requested from the tool owners.
+- Sample case (trimmed): `{file:"webapps/zohocrm/javascript/CrmModuleBuilder.js", start:77260, end:77270, category:"Functional", status:"Covered", description:"Create a MXN field and use an existing apiname ...", repo:"zohocrm", commits:[{commit_id:"b9fba5ee8f"},{commit_id:"b897e35534"}]}`
+- Per-test coverage: **no**. Only per-file/line missed ranges + free-text QA scenario.
+
+### Link 2 — Impact code coverage (crmqa19:8085 /codecoverage/#/impactcodecoverage/{A}/{B}/all)
+- **Scope: Java backend**, repo `core_library` (header "Repository core_library"). JaCoCo-based.
+- Summary for this pair: total changed lines 134, tested 87, not tested 47, coverage 64%, Java files modified 7, new 0.
+- **IDs:** `report_202611182138200310` (Nov 18, earlier) = `parentid`; `report_202611201336520228` (Nov 20) = child/current report `id`. Evidence: backend call `getimpactcodecoveragedetails?id,parentid,changeset`; JaCoCo session list for B starts Nov 18 21:41 (matches A's timestamp) and runs to Nov 20, i.e. B is cumulative over the parent's run. Interpretation (**to confirm with owners**): A = baseline/parent run, B = later run on same build; impact view = changed lines (by changeset) x JaCoCo hits in B, with history across earlier reports.
+- **Output:** table of *not-tested changed line ranges* per Java class: `S.No | Class file (+History) | Line No. | AI Description | Description` e.g. `MXNUtil.java 1151-1152`, `CustomModuleUtil.java 9833-9834`. 19 rows / 47 lines. Row "Description" holds "Recent API Impacted: Report Id: report_... Code Type: Functional API Code <QA scenario text>" — i.e. a **line range -> API scenario** hint carried over from a prior report that covered that code. Filter by Category (Functional UI/API Code, Testing Not Needed, Exception, Migration, Automation). Per-row "Changeset: <short sha>" is shown.
+- **Backend endpoints** (same origin; relative to `/codecoverage/`): `report/getreportstatus?tableid,reoprtid`, `report/getcodecoverageiddetails?id,reportid`, `report/getStats?tableid,reportid`, `report/getstatuscatestats?tableid,reportid`, `report/getimpactcodecoveragedetails?id,parentid,changeset`, `report/getauthors`, `common/getconstants`. **These return `{"response":"Authentication failed","status":"failed"}` when I call them directly** (page attaches auth I did not extract) -> JSON samples for them NOT captured.
+- **Static JaCoCo HTML is fetchable** with HTTP 200 even with `credentials: omit`: `/Report/Report_CodeCoverage_{reportId}/index.html` (package table), `.../{pkg}/{Class}.java.html` (per-line `span.fc|pc|nc id="L123"`, branch info in `title`), `.../jacoco-sessions.html` (1137 rows). `jacoco.csv/.xml` = 404 (not published). Sample: `MXNUtil.java.html` fc=566, pc=133, nc=2741 lines. Per-line hit data = best machine-readable source.
+- **Per-test coverage: no.** JaCoCo sessions are `<server-ip>-<hash>` with start/dump times (per JVM process), not per test case.
+- Branch/commit: link 2 shows changeset short SHA per row, but no branch field visible in UI; backend `getcodecoverageiddetails` probably has it (auth blocked). Link 1's API has branch + full SHA.
+
+### Repo stats (blobless clone of zohocrm, measured)
+- Clone URL works: `https://repository.zohocorpcloud.in/zohocorp/CRM/zohocrm.git` (redirects to `zrepository.zohocorpcloud.in`; mirror must follow redirects).
+- Blobless clone: **2,776,357 objects, 343 MiB pack, ~268 MiB transfer** (~30 s at 9.7 MiB/s). Cheap to mirror.
+- `origin/master`: **33,792 files**. Ext mix: java 17,412 / js 6,036 / html 2,797 / png 1,379 / less 1,325 / jsp 1,078 / css 997 / svg 642 / xml 392 / gif 353 / handlebars 306 / json 277 / md 139 / properties 134.
+  - Index targets: ~17.4k java + ~6k js (+ jsp/handlebars/xml/properties as light text). Roughly 24k code files; images/css/less skipped.
+- **Remote branches: 17,879.** Huge. Never index all branches. Index master + on-demand branches only (user switch / watch), manifest-per-branch is cheap but blob embedding/indexing must be lazy.
+- Not measured: total blob bytes. `ls-tree -l` on a blobless clone lazy-fetches every blob one by one (hangs). Measure instead by fetching master blobs in one batch (`git read-tree` + `git checkout`, or `git fetch --filter=blob:limit=...`) when we do Phase 1 spike.
+- Note: JS files are huge (CrmModuleBuilder.js >77k lines) - need size cap / minified detection before chunking.
+
+## B. Impact on design
+1. Coverage sources are **two formats**: JS = line-range JSON API (diff-scoped, QA-annotated); Java = JaCoCo static HTML (+ auth'd JSON). `ingest_coverage` needs two adapters behind one internal schema `(repo, branch, commit, file, line, hits|missed, source_report_id)`.
+2. Tools already compute "changed + uncovered". Our value-add is: map changed lines to **symbols**, cross-check against **commit descriptions** (ground truth), and link to **tests/APIs**. `coverage_gap` can be computed ourselves from `git diff` x JaCoCo line hits, and *validated* against their report.
+3. **No per-test coverage** -> `impact_tests` v1 = lexical/identifier search over test paths + the "Recent API Impacted" scenario text from past reports as a signal. Must state method used.
+4. Link-1 per-case `commits[]` (short SHA) and `end_changeset` give a commit mapping for JS; Java needs the auth'd endpoint or a manual `commit` argument.
+
+## C. Phased plan
+
+**Phase 1 — mirror + indexer (no embeddings)**
+- Blobless mirror `git clone --filter=blob:none --bare`; `git fetch` per branch; manifest = `ls-tree -r` -> `path->blob`.
+- tree-sitter (Java, JS/TS, + config as text) symbol chunks; skip generated/vendored/min/binary.
+- SQLite per repo: `symbols(id,path,blob,start,end,kind,name,signature,summary)`, FTS5 with identifier-splitting tokenizer (camelCase/snake), `branch_manifest`. Bodies read via `git cat-file`.
+- Exit: index full master; reindex a branch by blob diff; measure time/size.
+
+**Phase 2 — core MCP tools**
+- Streamable-HTTP server (TypeScript or Python). `list_branches, switch_branch, reindex, index_status, get_code_context` (ranked cards ~50-100 tok), `get_symbol`. Per-user active branch in session. Job queue with per-branch lock.
+- Add embeddings only if lexical eval is weak (see risks).
+
+**Phase 3 — diff / coverage / impact (real formats)**
+- `diff_symbols(base,head)`: `git diff -U0` hunks -> symbols via manifest line ranges.
+- `change_summary`: files, symbols, modules (path prefixes), tests touched, added/removed public APIs.
+- `ingest_coverage(branch, source, report_id)`: adapter A: Link-1 JSON API (needs token); adapter B: JaCoCo HTML scraper (`span.fc/pc/nc#Lnn`) from `/Report/Report_CodeCoverage_{id}/`. Store with `commit` (JS: `end_changeset`; Java: required arg or from auth'd API).
+- `coverage_gap`: changed lines x uncovered lines -> symbols; report diff vs the tool's own missed list (sanity check).
+- `impact_tests`: identifier search over test dirs + prior "Recent API Impacted" scenario text; response says `method: lexical|scenario-history`.
+- `commit_vs_diff`: given check-in description text, compare against `change_summary` facts, flag unmentioned modules/APIs.
+
+**Phase 4 — AppSail, auth, webhooks**
+- Docker/AppSail deploy, persistent volume for mirror+SQLite (or rebuild from Stratus snapshot on cold start), Stratus snapshots, Data Store for users/watches.
+- Auth: Zoho SSO/OAuth -> map to repo read access; MCP bearer tokens. Webhook from repo host (fallback: fetch poll every N min).
+- Service credentials for coverage tool APIs.
+
+## D. Risks / open questions
+- **Coverage tool auth:** link-1 uses session cookie; link-2 JSON endpoints need an auth value; need service account/API key from tool owners. HTML under `/Report/` was readable without cookie.
+- **Commit mapping:** JaCoCo coverage is for a deployed build/changeset; diff base/head must match that build. Link 1 has `end_changeset` (40-char); link 2 only short SHAs per row. Coverage taken at SHA X is only valid for diff head = X. Need a check: refuse/flag if `head != coverage commit`.
+- **Frontend + backend are different repos?** Link 1 repo `zohocrm` (webapps/zohocrm/javascript/...), link 2 repo `core_library`. Index must support **multiple repos** (zohocrm + core_library at least). Confirm.
+- **Catalyst:** no native vector DB; AppSail disk size/persistence/instance restarts unverified; Zoho repo host may not be reachable from Catalyst (internal `zohocorpcloud.in`) -> verify network/VPN path first. Biggest go/no-go risk.
+- **Embeddings:** CRM JS file sizes huge (CrmModuleBuilder.js >77k lines) and Java classes huge (MXNUtil >3.4k lines). Symbol-level FTS probably enough for v1; add vectors only if an eval set (20 real QA questions) shows lexical recall problems.
+- Huge minified/generated JS must be excluded or the index blows up.
+- Link-2 ID semantics (parent/child) are inferred, not confirmed.
+- Repo-size stats missing (see section A "Not done").
+
+## E. Questions for you
+1. Can you run the git commands and paste output? Is `core_library` a separate repo?
+2. Can the coverage tool owners give an API token/service account for both tools?
+3. Is the Zoho repo host reachable from Catalyst AppSail?
+
+---
+
+# F. REVISION 2 (supersedes conflicting parts of section C)
+
+## F1. Branch scope: master base + per-branch overlay
+Problem: 17,879 remote branches, ~34k files on master. Full per-branch index is impossible.
+- **Master indexed fully, always.** Refreshed by fetch of `refs/heads/master` only.
+- **Branch = overlay**, not a copy. For branch X compute `git diff --raw master...X` (merge-base) -> changed/added/deleted paths. Index only the *new blobs* of those paths into an overlay table keyed `(branch, blob)`.
+- **Query on branch X** = overlay(X) UNION master symbols WHERE path NOT IN changed(X) AND path NOT deleted(X). Cost per branch ~ size of its diff (typically tens of files), not 34k.
+- **Never fetch all branches.** Narrow refspec: `git fetch origin refs/heads/X:refs/remotes/origin/X` on demand only. `list_branches` queries `git ls-remote --heads` with prefix/user filter, no local fetch.
+- **Lifecycle:** overlay created on `switch_branch`/`watch`/`diff_symbols`; LRU + TTL (e.g. 14 d idle) eviction; blobs refcounted so shared blobs across branches are indexed once. Cap overlays (e.g. 200) and overlay size.
+- **Stale base:** overlay is against master at time of build; store `master_sha`. If master moves, rebuild overlay manifest (cheap) and reindex only blobs not already known.
+- Blob bodies fetched lazily in batches (`git cat-file --batch` with promisor remote), never one-by-one.
+
+## F2. Coverage adapters (concrete)
+Internal schema: `coverage_report(report_id, source, repo, branch, commit, kind[js|java], fetched_at, mutable)` + `cov_line(report_id, file, line, state[covered|partial|missed])` + `cov_case(report_id, file, start, end, category, status, description, commits)` (JS only).
+- **Adapter JS (link 1):** pull `/api/coverage/{proj}/report/{id}` + `/case`. Gives branch + `end_changeset` + missed ranges + QA annotations. Expand ranges to `cov_line missed`. Auth: session cookie today -> need service token (open item). Report may be `status: Running` => mutable; cache with TTL, re-pull on request.
+- **Adapter Java (link 2):** scrape `/Report/Report_CodeCoverage_{id}/{pkg}/{Class}.java.html` (no auth needed in our test). Parse `span.fc|pc|nc#Lnn` + `title` branch info. Fetch only files touched by the diff (from `diff_symbols`), not the whole report -> small. Commit/branch: not in HTML; require `commit` arg or read from authenticated `getcodecoverageiddetails` once a token exists.
+- **On-demand, not bulk:** `coverage_gap(base, head, report_id)` fetches only needed files, caches by `(report_id, file)`. No standing ingest job in v1.
+- **Commit gate:** if report commit != head (or not an ancestor with no later changes to the touched files) -> return result flagged `commit_mismatch` with the list of files whose blob differs between report commit and head. Never silently trust.
+- **Cross-check:** compare our computed uncovered-changed lines against the tool's own missed list (link 1 cases / link 2 table); report diffs.
+- Test plan: use the two real reports (8539 JS, report_...0228 Java) as golden fixtures.
+
+## F3. Embeddings: lexical-only v1, vectors gated
+- **v1 = no embeddings.** SQLite FTS5 with identifier splitting (camelCase, snake_case, dotted packages), columns: symbol name (boost), signature, path tokens, short doc/comment text. Ranking = bm25 with name/path boosts + exact-identifier fast path.
+- Build a **20-30 question eval set** from real QA/dev questions + the two coverage reports' scenarios; track recall@10 / MRR.
+- **Gate:** only add vectors (Phase 5) if recall@10 < agreed threshold (e.g. 0.8). If added: embed only `signature + name + summary` per symbol (not bodies), int8, sqlite-vec, master + overlays only. Any provider is fine; run in a background job.
+- Saves cost/complexity now; schema keeps a nullable `vec` column so adding later needs no migration of metadata.
+
+## F4. Hosting/infra: spike first, stay portable
+- **Phase 0 (new, 1-2 days):** prove on a throwaway AppSail app: (a) outbound reach to `zrepository.zohocorpcloud.in` (+ git auth via secret env var), (b) writable disk size and whether it survives restart/redeploy, (c) memory/CPU limits and long-running process behavior, (d) ability to serve streamable-HTTP MCP behind Catalyst gateway (timeouts, SSE support), (e) reach to the coverage hosts (`*.csez.zohocorpin.com`), which are internal.
+- **Go/no-go:** if (a) or (e) fail, host the MCP on an internal Docker/VM instead and use Catalyst only for what it adds (auth/metadata). Coverage hosts are internal-only so internal hosting may be simpler overall.
+- **Portability:** everything under one `DATA_DIR` (mirror + `index.sqlite` + overlay files); config via env. No Catalyst SDK in the core.
+- **Persistence stance:** index is rebuildable from git (mirror ~30 s, master index time TBD in Phase 1 spike), so disk persistence is a *speed* feature, not a correctness one. Snapshot to Stratus optional, after we know rebuild time.
+- Metadata (users, watches, active branch): small; SQLite file in DATA_DIR for v1, move to Data Store/NoSQL only if multi-instance is needed.
+- Single instance, single writer for v1 (per-branch locks in-process). Scale-out is out of scope.
+
+## F5. Revised phases
+0. Hosting spike (above).
+1. Mirror + master index (lexical), measure index time/size, blob bytes, chunk counts.
+2. Overlay branches + core tools (`get_code_context`, `get_symbol`, `list_branches`, `switch_branch`, `index_status`) + eval set.
+3. `diff_symbols`, `change_summary`, coverage adapters (JS then Java), `coverage_gap` with commit gate, `impact_tests` (lexical + scenario-history, method stated).
+4. Auth (Zoho SSO -> repo access), webhooks (fallback polling master + watched branches), deploy.
+5. Optional vectors if eval gate fails.
+
+---
+
+# G. PHASE 1 SPIKE RESULTS (code in `server/`)
+
+Stack: Node 26 + TypeScript, better-sqlite3 (FTS5), web-tree-sitter 0.22.6 + tree-sitter-wasms 0.1.13 (newer web-tree-sitter 0.27 cannot load these grammars; keep pair pinned).
+Modules: `src/git.ts` (ls-tree, batched `cat-file --batch`), `src/chunker.ts` (symbol extraction), `src/tokens.ts` (identifier splitter), `src/db.ts` (schema), `src/indexer.ts`, `src/cli.ts` (`index | stats | search`).
+
+## Measured on zohocrm master (17879 remote branches exist; only master indexed)
+| Metric | Value |
+|---|---|
+| Java + JS blob bytes | **424 MB** (23.4k files), sparse-fetched in one batch in **29 s** |
+| Index build (parse + FTS) | **~41-45 s** single process |
+| Symbols | **339k** (methods ~247k, classes ~21k, JS functions/methods ~50k) |
+| SQLite size | **150 MB** (no source stored) |
+| Search latency | tens of ms in-process (CLI timing dominated by node startup) |
+| Skipped | 10 minified files; 1053 JS + 12 Java files produced no symbols (data-only/tiny) |
+| Biggest JS | CrmModuleBuilder.js 4.1 MB / 81k lines -> 872 symbols, 96% line coverage, parse 0.35 s |
+
+Consequences:
+- Full master rebuild from scratch is under a minute -> **disk persistence is not required**; Stratus snapshot is optional.
+- 150 MB per index. Overlays for branches are a small delta on top. Embeddings can wait.
+- Blob fetch for a blobless mirror must be batched (sparse-checkout or `fetch` of wanted blobs); lazy per-object fetch is far too slow (observed hang on `ls-tree -l`).
+
+## JS patterns handled (CRM-specific)
+- `var X = (function(){ ... })()` module pattern (CrmModuleBuilder.js style)
+- `function`, `var f = function`, `X.y = function`, object-literal methods
+- Zoho Lyte: `Lyte.Component.register("name", {...})`, `Lyte.Mixin.register(...)` (CRMClient/**), nested `methods:{}`/`actions:{}`
+- Ember-style `X.extend({...})`, `export default {...}`
+
+## Known gaps / TODO before Phase 2
+- Java fields/constants (e.g. `VCRMConstants`) are not indexed; add `static final` constants only, as they are searchable by name.
+- Query uses OR of tokens; add AND-first + phrase/identifier fast-path and path-token boost.
+- Class symbols span whole file; `get_symbol` for classes should return an outline, not the body.
+- `.jsp`, `.handlebars`, `.xml`, `.properties` not yet chunked (file-level entries only).
+- Phase 0 (AppSail spike) NOT done; needs a Catalyst project + decision to deploy something.
+- Overlay-branch logic (F1) not yet implemented; manifest table is already per-ref.
+
+---
+
+# H. PHASE 2 RESULTS (code in `server/`)
+
+Run: `REPO_DIR=<mirror> DATA_DIR=data PORT=8787 [MCP_TOKEN=...] npx tsx src/server.ts` (streamable HTTP at `/mcp`, `/health`). Eval: `npx tsx src/cli.ts eval [file] [ref]`.
+
+## Tools (all tested end to end with an MCP SDK client)
+`get_code_context`, `get_symbol`, `list_branches`, `switch_branch`, `reindex`, `index_status`. Per-session active branch (Mcp-Session-Id), default `master`; any tool can override with `branch`.
+
+## Design decisions made / changed vs section F
+- **Branch = full manifest per ref, not a diff overlay.** Symbols are keyed by blob SHA and shared; a branch only adds its `ref -> path -> blob` rows (~23k rows) plus symbols for blobs not seen before. Search joins `manifest(ref)`, which gives the same semantics as overlay with simpler SQL. Measured cost per branch: a few MB + new-blob symbols. Eviction (LRU/TTL) still TODO.
+- **Stable-per-DB symbol ids** like `wse.639a2` (rowid base36 + blob prefix check, ~4 tokens); stale ids give a clear "re-run get_code_context" error.
+- **Cards ~65 tokens each**; `get_symbol` prints numbered lines, default cap 150 lines; class/interface/enum return a member outline (capped at 80) instead of a body.
+- **Retrieval:** AND of query tokens first; if too few hits, OR over tokens + adjacent-token concatenations, reranked by token coverage then bm25. Name column also indexes adjacent-part concatenations (`pick`+`list` -> `picklist`). Stopwords stripped from queries.
+- **Batch blob prefetch**: `git fetch --filter=blob:none --stdin` with missing shas (the host allows fetch by object id). Without it each missing blob = 1 round trip.
+- Partial-index warning: searching a branch whose job is still running returns a WARNING line.
+- Single index writer (queue); concurrent switches to the same branch dedupe.
+
+## Measured
+| Item | Result |
+|---|---|
+| Seed eval (14 name-derived questions), master | recall@10 **1.00**, MRR **0.87**, p50 **~50 ms**, max ~95 ms (in-process, incl. rerank) |
+| Same eval on a branch | recall@10 1.00, MRR 0.87 |
+| `switch_branch` small branch (34 changed blobs) | **3.3 s** total (2.1 s index) |
+| `switch_branch` worst-ish branch (old base, 4,796 changed blobs, 129k symbols) | **~44 s**; tool returns after 25 s with "still indexing", job continues |
+| `reindex` with nothing new | 0.2-1.1 s |
+| `list_branches` filter over 17,878 branches | ~200 ms (local refs; `REMOTE_LIST=1` uses cached `ls-remote`) |
+| DB after master + 2 branches | 172 MiB |
+
+Caveat: the seed eval was written from symbol names seen in the index, so it is optimistic. Real QA/dev questions needed (Phase 2 exit criterion is on THEIR set).
+
+## Not done / next
+- Real eval set from QA questions; threshold decision for vectors.
+- No auth beyond optional static `MCP_TOKEN` (Phase 4). No webhooks / watch yet.
+- No master auto-refresh job; `reindex` is manual.
+- Branch eviction/caps, GC of unreferenced blobs and symbols.
+- Mirror here is the full local probe; production mirror = bare blobless clone (`git clone --bare --filter=blob:none`).
+- Java constants/fields, JSP/handlebars/XML/properties still not chunked.
+- Next: Phase 3 tools (`diff_symbols`, `change_summary`, coverage adapters, `coverage_gap`, `impact_tests`).
