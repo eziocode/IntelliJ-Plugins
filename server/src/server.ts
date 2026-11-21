@@ -279,6 +279,18 @@ const http = createServer(async (req, res) => {
     }
     if (req.url?.split("?")[0] !== "/mcp") { res.writeHead(404).end(); return; }
     if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) { res.writeHead(401).end("unauthorized"); return; }
+    // Default (MCP_STATEFUL=1 to disable): no sessions. Every request is self-contained and answered as plain JSON, which avoids the
+    // session path that the AppSail gateway mishandles (duplicate empty 400s on /mcp).
+    if (process.env.MCP_STATEFUL !== "1") {
+      const body = req.method === "POST" ? await readJson(req) : undefined;
+      if (req.method !== "POST") { res.writeHead(405, { allow: "POST" }).end(); return; }
+      const srv = buildServer({ repo: defaultRepo, branches: {} });
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+      res.on("close", () => { transport.close(); srv.close(); });
+      await srv.connect(transport);
+      await transport.handleRequest(req, res, body);
+      return;
+    }
     const sid = req.headers["mcp-session-id"] as string | undefined;
     const body = req.method === "POST" ? await readJson(req) : undefined;
     let t = sid ? transports.get(sid) : undefined;
