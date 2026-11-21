@@ -2,18 +2,80 @@
 // crm-index shim: a local stdio MCP server. The AI client talks MCP to this process;
 // this process calls the central index over plain HTTPS JSON (no MCP sessions cross the cloud gateway).
 //   CRM_INDEX_URL    base URL of the index, e.g. https://crmindex-xxxx.development.catalystappsail.in
-//   CRM_INDEX_TOKEN  bearer token for the index API
+//   CRM_INDEX_TOKEN  optional admin key; normally you sign in with Zoho instead (browser opens on first use)
 //   CRM_INDEX_REPO   optional default repo (server default otherwise)
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import http from "node:http";
+import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { join } from "node:path";
 
 const BASE = (process.env.CRM_INDEX_URL ?? "").replace(/\/$/, "");
-const TOKEN = process.env.CRM_INDEX_TOKEN ?? "";
+const ADMIN_TOKEN = process.env.CRM_INDEX_TOKEN ?? "";
 const REPO = process.env.CRM_INDEX_REPO || undefined;
-if (!BASE || !TOKEN) {
-  console.error("crm-index-shim: set CRM_INDEX_URL and CRM_INDEX_TOKEN");
+if (!BASE) {
+  console.error("crm-index-shim: set CRM_INDEX_URL");
   process.exit(1);
+}
+
+// ---------- Zoho sign-in session (stored per user, readable only by them) ----------
+const SESSION_DIR = join(homedir(), ".crm-index");
+const SESSION_FILE = join(SESSION_DIR, `session-${new URL(BASE).host}.json`);
+const loadSession = () => { try { return JSON.parse(readFileSync(SESSION_FILE, "utf8")); } catch { return null; } };
+const saveSession = (s) => { mkdirSync(SESSION_DIR, { recursive: true, mode: 0o700 }); writeFileSync(SESSION_FILE, JSON.stringify(s), { mode: 0o600 }); };
+const clearSession = () => { try { rmSync(SESSION_FILE); } catch {} };
+const currentToken = () => loadSession()?.token || ADMIN_TOKEN;
+
+function openBrowser(url) {
+  if (process.env.CRM_INDEX_NO_BROWSER === "1") return; // tests / headless: follow the printed URL yourself
+  const [cmd, args] = platform() === "darwin" ? ["open", [url]] : platform() === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  try { spawn(cmd, args, { stdio: "ignore", detached: true }).unref(); } catch {}
+}
+
+/** Ask the server where to sign in (an unauthenticated call returns it). Falls back to the built-in route. */
+async function discoverLoginPath() {
+  try {
+    const r = await fetch(`${BASE}/api/whoami`, { signal: AbortSignal.timeout(15_000) });
+    const d = await r.json();
+    if (d?.login) return d.login;
+  } catch {}
+  return "/auth/login";
+}
+
+let loginInFlight = null; // one sign-in at a time; concurrent tool calls share it
+let lastLoginUrl = "";
+
+/** Opens Zoho sign-in in the browser; resolves with the session once the server redirects back to us. */
+function startLogin(loginPath = "/auth/login") {
+  if (loginInFlight) return loginInFlight;
+  loginInFlight = new Promise((resolve, reject) => {
+    const state = randomBytes(18).toString("base64url");
+    const srv = http.createServer((req, res) => {
+      const u = new URL(req.url, "http://127.0.0.1");
+      if (u.pathname !== "/callback") { res.writeHead(404).end(); return; }
+      if (u.searchParams.get("state") !== state || !u.searchParams.get("token")) {
+        res.writeHead(400, { "content-type": "text/plain" }).end("Sign-in did not match this request. Run the tool again.");
+        return;
+      }
+      const session = { token: u.searchParams.get("token"), email: u.searchParams.get("email") ?? "", at: Date.now() };
+      saveSession(session);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end('<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;margin:4em"><h2>Signed in to crm-index</h2><p>You can close this tab and go back to your AI tool.</p>');
+      srv.close(); clearTimeout(timer); resolve(session);
+    });
+    const timer = setTimeout(() => { srv.close(); reject(new Error("sign-in timed out")); }, 5 * 60_000);
+    srv.listen(0, "127.0.0.1", () => {
+      const port = srv.address().port;
+      const target = /^https?:\/\//.test(loginPath) ? loginPath : `${BASE}${loginPath}`;
+      lastLoginUrl = `${target}${target.includes("?") ? "&" : "?"}port=${port}&state=${state}`;
+      console.error(`crm-index: sign in at ${lastLoginUrl}`);
+      openBrowser(lastLoginUrl);
+    });
+  }).finally(() => { loginInFlight = null; });
+  return loginInFlight;
 }
 
 // The active branch lives here, in the user's own process, so the server stays stateless per request.
@@ -21,13 +83,14 @@ let activeBranch = "master";
 
 const text = (t, isError = false) => ({ content: [{ type: "text", text: t }], isError });
 
-async function api(method, path, body, { timeoutMs = 60_000, retries = 2 } = {}) {
+async function rawApi(method, path, body, { timeoutMs = 60_000, retries = 2 } = {}) {
   for (let attempt = 0; ; attempt++) {
     let res;
     try {
+      const tok = currentToken();
       res = await fetch(`${BASE}${path}`, {
         method,
-        headers: { authorization: `Bearer ${TOKEN}`, ...(body ? { "content-type": "application/json" } : {}) },
+        headers: { ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...(body ? { "content-type": "application/json" } : {}) },
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -44,8 +107,23 @@ async function api(method, path, body, { timeoutMs = 60_000, retries = 2 } = {})
   }
 }
 
+/** API call that handles "login required / session expired" by signing in with Zoho and retrying once. */
+async function api(method, path, body, opts) {
+  const r = await rawApi(method, path, body, opts);
+  if (r.status !== 401 || !["login_required", "session_expired"].includes(r.data.error) || !r.data.login) return r;
+  if (r.data.error === "session_expired") clearSession();
+  const login = startLogin(r.data.login);
+  // MCP clients time out tool calls (~60 s): wait a while for the user to finish signing in, else ask them to retry
+  const done = await Promise.race([login.then(() => true, () => false), new Promise((res) => setTimeout(() => res(false), 45_000))]);
+  if (!done) {
+    return { status: 401, data: { ok: false, error: `Sign in with Zoho in the browser window that just opened${lastLoginUrl ? ` (or open ${lastLoginUrl})` : ""}, then retry.`, needsLogin: true } };
+  }
+  return rawApi(method, path, body, opts);
+}
+
 const errText = (r) => {
-  if (r.status === 401) return "crm-index: unauthorized. Check CRM_INDEX_TOKEN.";
+  if (r.data?.needsLogin) return `crm-index: ${r.data.error}`;
+  if (r.status === 401) return "crm-index: not signed in. Run the `login` tool.";
   if (r.status === 503 || r.status === 0) return `crm-index is starting or unreachable (${r.data.error ?? r.status}). Retry in a minute.`;
   return `crm-index error ${r.status}: ${r.data.error ?? "unknown"}${r.data.hint ? ` (${r.data.hint})` : ""}`;
 };
@@ -117,13 +195,25 @@ srv.registerTool("diff_symbols", {
   return text(r.data.text);
 });
 
+srv.registerTool("login", {
+  description: "Sign in to crm-index with your Zoho account (opens a browser). Use when tools say you are not signed in, or to switch accounts.",
+  inputSchema: {},
+}, async () => {
+  clearSession();
+  const login = startLogin(await discoverLoginPath());
+  const done = await Promise.race([login.then(() => true, () => false), new Promise((res) => setTimeout(() => res(false), 50_000))]);
+  if (!done) return text(`Finish signing in in the browser${lastLoginUrl ? ` (${lastLoginUrl})` : ""}, then run any crm-index tool.`);
+  return text(`Signed in as ${loadSession()?.email ?? "?"}.`);
+});
+
 srv.registerTool("index_status", {
   description: "Index health: indexed branches, symbol counts, running jobs, and this session's active branch.",
   inputSchema: {},
 }, async () => {
   const r = await api("GET", "/api/status");
   if (!r.data.ok) return text(errText(r), true);
-  const lines = [`active branch (this session): ${activeBranch}`];
+  const who = await rawApi("GET", "/api/whoami");
+  const lines = [`signed in as: ${who.data?.user ?? "?"}`, `active branch (this session): ${activeBranch}`];
   for (const x of r.data.repos) lines.push(`[${x.repo}] symbols=${x.symbols} refs: ${x.refs.map((f) => `${f.ref}(${f.files})`).join(", ") || "none"}`);
   if (r.data.jobs?.length) lines.push(`jobs: ${r.data.jobs.map((j) => `${j.ref}=${j.state}${j.error ? `(${j.error.slice(0, 80)})` : ""}`).join(", ")}`);
   return text(lines.join("\n"));

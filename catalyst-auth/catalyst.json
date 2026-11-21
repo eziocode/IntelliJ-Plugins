@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "targets": [
+      "crm_index_auth"
+    ],
+    "ignore": [],
+    "source": "functions"
+  }
+}

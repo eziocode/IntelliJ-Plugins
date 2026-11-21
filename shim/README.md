@@ -19,12 +19,18 @@ Requires Node 20+.
 
 ```bash
 claude mcp add crm-index \
-  -e CRM_INDEX_URL=https://crmindex-50041054942.development.catalystappsail.in \
-  -e CRM_INDEX_TOKEN=<your index token> \
+  -e CRM_INDEX_URL=https://crmindex.development.catalystappsail.in \
   -- node /absolute/path/to/shim/index.mjs
 ```
 
-Ask the index owner for the token. Do not commit it or paste it into chats.
+No token is needed. The first time a tool runs, your browser opens the Catalyst sign-in page for the index
+(Zoho-owned login). After you sign in, the session is saved in `~/.crm-index/` (readable only by you). When it
+expires (7 days by default), the next tool call opens the browser again. Only accounts from the allowed email
+domain (default `zohocorp.com`) get in. If the page says "Sign in required", sign in and then open the link again
+or re-run the tool.
+
+Run the `login` tool to sign in again or switch accounts. `CRM_INDEX_TOKEN` is an optional admin key that skips
+the browser (for automation); do not commit it or paste it into chats.
 
 ## Tools
 
@@ -35,6 +41,7 @@ Ask the index owner for the token. Do not commit it or paste it into chats.
 | `list_branches` | Branches filtered by substring (the repo has ~18k). `*` = indexed. |
 | `switch_branch` | Make a branch active for your session; indexes it on the server if needed. |
 | `diff_symbols` | Changed methods/classes between two branches (default: active branch vs master). |
+| `login` | Sign in (or re-sign in) with Zoho. Opens a browser. |
 | `index_status` | Indexed branches, symbol counts, running jobs, your active branch. |
 
 The active branch is kept in the shim process, per user session.
@@ -49,5 +56,6 @@ The active branch is kept in the shim process, per user session.
 ## Test
 
 ```bash
-CRM_INDEX_URL=... CRM_INDEX_TOKEN=... node test-client.mjs
+CRM_INDEX_URL=... CRM_INDEX_TOKEN=... node test-client.mjs   # admin key
+CRM_INDEX_URL=http://localhost:8787 node test-login.mjs        # sign-in flow, against a server run with DEV_FAKE_LOGIN_EMAIL
 ```

@@ -2,7 +2,7 @@
 # Smoke test for the deployed REST API. Usage:
 #   MCP_TOKEN=... sh deploy/smoke.sh [base-url]
 # The token is read from the environment; it is never printed.
-U="${1:-https://crmindex-50041054942.development.catalystappsail.in}"
+U="${1:-https://crmindex.development.catalystappsail.in}"
 if [ -z "$MCP_TOKEN" ]; then echo "set MCP_TOKEN first"; exit 1; fi
 H="Authorization: Bearer $MCP_TOKEN"
 code() { curl -s -m 60 -o /tmp/smoke.out -w '%{http_code}' "$@"; }

@@ -14,6 +14,7 @@ import { diffSymbols } from "./diff.js";
 import { changeSummary, formatDiffSymbols, formatSummary } from "./summary.js";
 import { coverageGap, formatGap, type GapKind } from "./gap.js";
 import { covConfigFromEnv, ingestJsReport } from "./coverage.js";
+import { handleAuth, loginEnabled, loginTarget, verifySession } from "./auth.js";
 import { compareDescription, formatDescriptionCheck, formatImpact, impactTests } from "./impact.js";
 
 const DATA = process.env.DATA_DIR ?? "data";
@@ -246,8 +247,22 @@ const http = createServer(async (req, res) => {
   try {
     if (req.url === "/health") { res.writeHead(200).end("ok"); return; }
     const path = req.url?.split("?")[0] ?? "";
+    if (path.startsWith("/auth/")) { await handleAuth(path, req, res); return; }
     if (path.startsWith("/api/")) {
-      if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) { json(res, 401, { ok: false, error: "unauthorized" }); return; }
+      // admin key (MCP_TOKEN) or a Zoho sign-in session minted by /auth/callback
+      const bearer = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+      let user = "";
+      if (TOKEN && bearer === TOKEN) user = "admin";
+      else {
+        const v = bearer ? verifySession(bearer) : null;
+        if (v?.session) user = v.session.email;
+        else if (TOKEN || loginEnabled()) {
+          json(res, 401, { ok: false, error: v?.expired ? "session_expired" : "login_required", login: loginEnabled() ? loginTarget() : null });
+          return;
+        }
+      }
+      if (path === "/api/whoami") { json(res, 200, { ok: true, user: user || "anonymous" }); return; }
+      if (user && user !== "admin") console.error(`[api] ${user} ${req.method} ${path}`);
       await handleApi(path, req, res);
       return;
     }

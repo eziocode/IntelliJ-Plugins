@@ -363,3 +363,47 @@ Master is always active. Any other branch is indexed on request, kept while used
 
 Open: rotate the MCP token (it was pasted in chat); Stratus snapshot restore or a min-1 warm instance to avoid the
 2-minute cold rebuild; `smoke.sh` `symbol` step misbehaves under macOS `sh` (endpoint verified directly).
+
+---
+
+# N. ZOHO SIGN-IN FOR THE INDEX API
+
+Developers sign in with Zoho instead of sharing a token. `server/src/auth.ts`: `/auth/login` -> Zoho OAuth ->
+`/auth/callback` exchanges the code, reads the user's email, requires an allowed domain, mints an HMAC-signed
+session (`SESSION_TTL_HOURS`, default 168) and redirects to the shim's one-shot `127.0.0.1` listener. `/api/*`
+accepts the session or the admin `MCP_TOKEN`; otherwise 401 `login_required` / `session_expired`. The shim opens
+the browser on first use, stores the session in `~/.crm-index/` (0600), and signs in again when it expires.
+
+Verified locally with a fake login (`DEV_FAKE_LOGIN_EMAIL`, test only): first call signs in and retries; a call
+after expiry signs in again (2 sign-ins across 3 calls); a non-company email is refused; the session file is 0600.
+
+Needs (cloud): a Zoho OAuth client (server-based app, India DC `accounts.zoho.in`) with redirect URI
+`<PUBLIC_URL>/auth/callback`, and env vars `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_ACCOUNTS`,
+`PUBLIC_URL`, `SESSION_SECRET` (random), optional `ALLOWED_EMAIL_DOMAINS`. Sessions are not revocable per user
+before expiry (stateless); rotate `SESSION_SECRET` to invalidate everyone.
+
+---
+
+# O. SIGN-IN VIA CATALYST AUTHENTICATION (replaces the Zoho OAuth client)
+
+- Zoho Corp's admin policy blocks self-made OAuth apps: the "CRM Index" client I created in the Zoho API Console
+  (India DC) gets "Access restricted ... restricted by your administrator" at the consent step. The OAuth routes in
+  `server/src/auth.ts` stay as an optional path (works if an admin whitelists a client) but are unused.
+- Catalyst Authentication is enabled on the project (hosted/embedded/third-party login; public signup; the QA team's
+  "QA Automation Audit" web app already uses it). `catalyst-auth/` holds an Advanced I/O function `crm_index_auth`
+  that reads the Catalyst session user (`getCurrentUser`), requires an allowed email domain, mints the signed session
+  token the server already verifies, and redirects to the shim's local callback.
+- `crmindex` advertises the function via `LOGIN_URL` in its `login_required` response; the shim opens whatever
+  URL it is given and stores the session in `~/.crm-index/` (0600).
+
+Verified for real on the Development deployment: headless shim -> function -> callback -> "Signed in as
+aswin.kg@zohocorp.com" -> `index_status` shows the user -> a second shim run reused the saved session and searched
+without a new sign-in. Spike result that justified the design: from a signed-in browser the function sees
+`email_id` and `user_type: "App User"`.
+
+Not verified: a user with no Catalyst session (first-time flow shows a "Sign in required" page with a link to
+Catalyst's hosted login; after login Catalyst sends people to the project's app, so they reopen the link);
+session expiry against the real function (expiry/re-login was verified locally with a fake login).
+
+Housekeeping: the unused Zoho OAuth client and the `ZOHO_*`/`PUBLIC_URL` variables on crmindex can be deleted.
+Session secret was rotated to a fresh value used by both the function and crmindex.

@@ -1,0 +1,13 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+const transport = new StdioClientTransport({ command: "node", args: ["index.mjs"], env: { ...process.env, CRM_INDEX_NO_BROWSER: "1" }, stderr: "pipe" });
+let logins = 0;
+transport.stderr.on("data", async (d) => { const m = /sign in at (\S+)/.exec(String(d)); if (m) { logins++; await fetch(m[1], { redirect: "follow" }); } });
+const c = new Client({ name: "expiry-test", version: "0" });
+await c.connect(transport);
+const q = async (label) => { const r = await c.callTool({ name: "get_code_context", arguments: { query: "rollback import", limit: 1 } }); console.log(`${label}: ${r.isError ? "ERROR " : ""}${r.content[0].text.split("\n")[0]}  (sign-ins so far: ${logins})`); };
+await q("call 1 (no session)");
+await q("call 2 (session fresh)");
+await new Promise((r) => setTimeout(r, 3000));
+await q("call 3 (session expired)");
+await c.close();
