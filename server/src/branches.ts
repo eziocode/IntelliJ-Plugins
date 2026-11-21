@@ -57,15 +57,21 @@ export function isIndexed(db: Db, ref: string): boolean {
   return !!db.prepare("SELECT 1 FROM manifest m JOIN refs r ON r.id = m.ref_id WHERE r.name = ? LIMIT 1").get(ref);
 }
 
-type Job = { ref: string; state: "queued" | "running" | "done" | "error"; startedAt: number; report?: IndexReport; error?: string; progress?: { done: number; total: number }; promise: Promise<void> };
+type Job = { ref: string; state: "waiting" | "queued" | "running" | "done" | "error"; startedAt: number; report?: IndexReport; error?: string; progress?: { done: number; total: number }; promise: Promise<void> };
 const jobs = new Map<string, Job>();
 let queue: Promise<unknown> = Promise.resolve(); // single writer: one index job at a time
+
+// Capacity: at most MAX_PENDING builds in flight (running + queued). Beyond that, new requests WAIT (state "waiting")
+// until a slot frees; they never fail. Shown in index_status so people can see the line.
+export const MAX_PENDING = Math.max(1, Number(process.env.INDEX_MAX_PENDING ?? 5));
+let pending = 0;
+export const capacity = () => ({ pending, max: MAX_PENDING, waiting: [...jobs.values()].filter((j) => j.state === "waiting").length });
 
 const jkey = (repo: string, ref: string) => `${repo}|${ref}`;
 
 export function isIndexing(repo: string, ref: string): boolean {
   const j = jobs.get(jkey(repo, ref));
-  return !!j && (j.state === "queued" || j.state === "running");
+  return !!j && (j.state === "waiting" || j.state === "queued" || j.state === "running");
 }
 
 export function jobStatus(): Omit<Job, "promise">[] {
@@ -75,9 +81,15 @@ export function jobStatus(): Omit<Job, "promise">[] {
 /** Fetch just this branch (never all 17k) and index its manifest; blobs already known are reused. Dedupes concurrent calls per ref. */
 export function ensureIndexed(db: Db, repo: string, branch: string, opts: { refresh?: boolean; fetch?: boolean } = {}): Job {
   const running = jobs.get(jkey(repo, branch));
-  if (running && (running.state === "queued" || running.state === "running")) return running;
-  const job: Job = { ref: branch, state: "queued", startedAt: Date.now(), promise: Promise.resolve() };
-  const p: Promise<void> = queue.then(async () => {
+  if (running && (running.state === "waiting" || running.state === "queued" || running.state === "running")) return running;
+  const job: Job = { ref: branch, state: pending >= MAX_PENDING ? "waiting" : "queued", startedAt: Date.now(), promise: Promise.resolve() };
+  // reserve a slot now (or when one frees), then run in order behind the single writer
+  const admitted: Promise<void> = (async () => {
+    while (pending >= MAX_PENDING) await new Promise((r) => setTimeout(r, 1000));
+    pending++;
+    job.state = "queued";
+  })();
+  const p: Promise<void> = Promise.all([queue, admitted]).then(async () => {
     job.state = "running";
     try {
       // fetch + index run in the worker thread (git fetch is blocking); the main thread only queues and reports
@@ -100,6 +112,8 @@ export function ensureIndexed(db: Db, repo: string, branch: string, opts: { refr
     } catch (e) {
       job.state = "error";
       job.error = (e as Error).message.split("\n")[0];
+    } finally {
+      pending--;
     }
   });
   queue = p;

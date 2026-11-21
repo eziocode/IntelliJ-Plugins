@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "crm-index": {
+      "command": "node",
+      "args": ["tools/crm-index/index.mjs"],
+      "env": {
+        "CRM_INDEX_URL": "https://crmindex.development.catalystappsail.in"
+      }
+    }
+  }
+}

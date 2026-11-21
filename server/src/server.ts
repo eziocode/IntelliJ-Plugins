@@ -15,6 +15,9 @@ import { changeSummary, formatDiffSymbols, formatSummary } from "./summary.js";
 import { coverageGap, formatGap, type GapKind } from "./gap.js";
 import { covConfigFromEnv, ingestJsReport } from "./coverage.js";
 import { handleAuth, loginEnabled, loginTarget, verifySession } from "./auth.js";
+import { capacity } from "./branches.js";
+import { snapshotInWorker } from "./indexPool.js";
+import { snapshotEnabled } from "./snapshot.js";
 import { compareDescription, formatDescriptionCheck, formatImpact, impactTests } from "./impact.js";
 
 const DATA = process.env.DATA_DIR ?? "data";
@@ -181,7 +184,7 @@ const json = (res: import("node:http").ServerResponse, code: number, obj: unknow
   res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(obj));
 };
 
-async function handleApi(path: string, req: IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+async function handleApi(path: string, req: IncomingMessage, res: import("node:http").ServerResponse, isAdmin = false): Promise<void> {
   const q = new URL(req.url ?? "/", "http://x").searchParams;
   const b = (req.method === "POST" ? ((await readJson(req)) ?? {}) : {}) as Record<string, any>;
   const get = (k: string) => q.get(k) ?? undefined;
@@ -195,7 +198,7 @@ async function handleApi(path: string, req: IncomingMessage, res: import("node:h
     }
     const rd = (f: string) => { try { return readFileSync(f, "utf8").slice(0, 600); } catch { return null; } };
     const mirrors = [...repos.values()].map((r) => ({ repo: r.name, dir: r.dir, objects: existsSync(`${r.dir}/objects`) }));
-    return json(res, 200, { ok: true, repos: out, mirrors, cloneStatus: rd("/tmp/crm-index/mirror.status"), cloneErr: rd("/tmp/crm-index/clone.err"), jobs: jobStatus().filter((j) => j.state !== "done") });
+    return json(res, 200, { ok: true, capacity: capacity(), repos: out, mirrors, cloneStatus: rd("/tmp/crm-index/mirror.status"), cloneErr: rd("/tmp/crm-index/clone.err"), jobs: jobStatus().filter((j) => j.state !== "done") });
   }
 
   if (path === "/api/branches" && req.method === "GET") {
@@ -240,6 +243,14 @@ async function handleApi(path: string, req: IncomingMessage, res: import("node:h
     return json(res, 200, { ok: true, base, head, symbols: d.symbols, files: d.files.map((f) => f.path), text: formatDiffSymbols(d, Number(b.limit ?? 200)) });
   }
 
+  if (path === "/api/admin/snapshot" && req.method === "POST") {
+    if (!isAdmin) return json(res, 403, { ok: false, error: "admin only" });
+    if (!snapshotEnabled()) return json(res, 503, { ok: false, error: "SNAPSHOT_URL/SNAPSHOT_KEY not configured" });
+    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
+    if (!isIndexed(r.db, BASE)) return json(res, 409, { ok: false, error: "master not indexed yet" });
+    try { return json(res, 200, { snapshot: await snapshotInWorker(r.db, r.name) }); } catch (e) { return json(res, 500, { ok: false, error: (e as Error).message }); }
+  }
+
   return json(res, 404, { ok: false, error: `no route ${req.method} ${path}` });
 }
 
@@ -263,7 +274,7 @@ const http = createServer(async (req, res) => {
       }
       if (path === "/api/whoami") { json(res, 200, { ok: true, user: user || "anonymous" }); return; }
       if (user && user !== "admin") console.error(`[api] ${user} ${req.method} ${path}`);
-      await handleApi(path, req, res);
+      await handleApi(path, req, res, user === "admin");
       return;
     }
     if (req.url?.split("?")[0] !== "/mcp") { res.writeHead(404).end(); return; }
@@ -309,6 +320,38 @@ http.listen(PORT, () => {
       }
     }
   }, 30_000).unref();
+  // After a snapshot restore the index is usable at once but stale: once the mirror exists, refresh master from git once.
+  let refreshedAfterBoot = false;
+  setInterval(() => {
+    if (refreshedAfterBoot) return;
+    for (const r of repos.values()) {
+      if (isIndexed(r.db, BASE) && existsSync(`${r.dir}/objects`) && !isIndexing(r.dir, BASE)) {
+        refreshedAfterBoot = true;
+        console.error(`${r.name}: mirror ready, refreshing master`);
+        ensureIndexed(r.db, r.dir, BASE, { refresh: true });
+      }
+    }
+  }, 30_000).unref();
+  // Snapshot to Stratus when master is indexed and the last snapshot (recorded in the DB, so it survives a restore) is older than SNAPSHOT_EVERY_HOURS.
+  if (snapshotEnabled()) {
+    const everyMs = Number(process.env.SNAPSHOT_EVERY_HOURS ?? 12) * 3600_000;
+    let snapping = false;
+    setInterval(async () => {
+      if (snapping) return;
+      for (const r of repos.values()) {
+        if (!isIndexed(r.db, BASE) || isIndexing(r.dir, BASE)) continue;
+        const at = Number((r.db.prepare("SELECT v FROM meta WHERE k='snapshot_at'").get() as { v: string } | undefined)?.v ?? 0);
+        if (Date.now() - at < everyMs) continue;
+        snapping = true;
+        try {
+          const o = await snapshotInWorker(r.db, r.name);
+          console.error(o.ok ? `${r.name}: snapshot uploaded ${Math.round((o.gzBytes ?? 0) / 1048576)} MiB gz in ${(o.ms / 1000).toFixed(1)}s` : `${r.name}: snapshot skipped: ${o.skipped}`);
+        } catch (e) { console.error(`${r.name}: snapshot failed: ${(e as Error).message}`); }
+        snapping = false;
+      }
+    }, 120_000).unref();
+    console.error(`snapshots: every ${everyMs / 3600_000} h to Stratus`);
+  }
   // PRELOAD_REFS=refs... (comma-separated branch names) are indexed in the background at boot, e.g. the team's default branches
   const preload = (process.env.PRELOAD_REFS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
   for (const r of repos.values()) for (const b of preload) if (!isIndexed(r.db, b)) { console.error(`${r.name}: preloading ${b}`); ensureIndexed(r.db, r.dir, b); }

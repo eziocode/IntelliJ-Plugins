@@ -1,7 +1,8 @@
 {
   "functions": {
     "targets": [
-      "crm_index_auth"
+      "crm_index_auth",
+      "crm_index_snapshot"
     ],
     "ignore": [],
     "source": "functions"

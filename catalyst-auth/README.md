@@ -35,3 +35,15 @@ crmindex AppSail so the server tells clients where to sign in.
 - First-ever use for someone without a Catalyst session: the function shows a sign-in page; after signing in
   (Catalyst sends them to the project's app), open the sign-in link again or re-run the tool. Tested only with an
   already signed-in browser.
+
+## Snapshot signer: `crm_index_snapshot`
+
+Hands out short-lived (15 min) signed Stratus URLs so the crmindex AppSail can save and restore its index
+snapshot (`snapshots/<repo>.sqlite.gz` in bucket `crmindex-snapshots`) without holding Catalyst credentials.
+
+- Call: `GET .../server/crm_index_snapshot/execute?action=get|put&key=snapshots/<name>` with header
+  `x-index-auth: <unix ms>.<base64url(HMAC-SHA256(SNAPSHOT_KEY, <unix ms>))>`; the timestamp must be within 5 min.
+  (The gateway strips `Authorization`, hence the custom header.)
+- Env on the function: `SNAPSHOT_KEY` (shared secret), optional `SNAPSHOT_BUCKET`. Same `SNAPSHOT_KEY` plus
+  `SNAPSHOT_URL` (the function's `/execute` URL) go on the crmindex AppSail.
+- Deploy with the same scrub-after procedure as the login function (never commit the key).

@@ -34,6 +34,16 @@ if (!existsSync("node_modules/tsx") && existsSync("deps.tgz")) {
   note(`[deps] tar status=${r.status} ${r.error ? r.error.message : ""} ${(r.stderr || "").slice(0, 200)}`);
   if (r.status !== 0) { state.stage = "failed"; state.error = `unpack failed: ${r.error?.message ?? r.stderr}`; }
 }
+// stage 1b: restore the index snapshot from Stratus (skipped when not configured or an index is already present)
+if (state.stage !== "failed" && process.env.SNAPSHOT_URL && process.env.SNAPSHOT_KEY) {
+  state.stage = "restoring";
+  await new Promise((resolve) => {
+    const c = spawn(process.execPath, ["deploy/restore.mjs"], { env: { ...process.env, DATA_DIR: process.env.DATA_DIR ?? "/tmp/crm-index/data", REPO_NAME: process.env.REPO_NAME ?? "zohocrm" }, stdio: ["ignore", "pipe", "pipe"] });
+    c.stdout.on("data", (d) => String(d).split("\n").filter(Boolean).forEach(note));
+    c.stderr.on("data", (d) => String(d).split("\n").filter(Boolean).forEach(note));
+    c.on("exit", resolve);
+  });
+}
 if (state.stage !== "failed") {
   // stage 2: the MCP server (its own env: PORT=internal)
   state.stage = "server-starting";
