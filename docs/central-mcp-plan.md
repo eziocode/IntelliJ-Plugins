@@ -202,3 +202,34 @@ Caveat: the seed eval was written from symbol names seen in the index, so it is 
 - Mirror here is the full local probe; production mirror = bare blobless clone (`git clone --bare --filter=blob:none`).
 - Java constants/fields, JSP/handlebars/XML/properties still not chunked.
 - Next: Phase 3 tools (`diff_symbols`, `change_summary`, coverage adapters, `coverage_gap`, `impact_tests`).
+
+---
+
+# I. PHASE 3 RESULTS (diff / coverage / impact; code in `server/`)
+
+New tools (all tested over MCP): `diff_symbols`, `change_summary`, `compare_description`, `ingest_coverage`, `coverage_gap`, `impact_tests`. Server is now multi-repo: `REPOS="zohocrm=/path/mirror[,core_library=/path/mirror2]"`, one SQLite per repo (`data/<repo>.sqlite`), every tool takes optional `repo`. Session keeps an active branch per repo.
+
+Coverage config (env, server-side only; tools never accept URLs): `COVERAGE_JACOCO_BASE` (prefix; `<reportId>/<pkg>/<Class>.java.html` is appended), `COVERAGE_JS_BASE`, `COVERAGE_JS_PROJECT`, `COVERAGE_JS_COOKIE` or `COVERAGE_JS_TOKEN`, `COVERAGE_FIXTURE_DIR` (offline JSON fixtures). Report ids are regex-validated.
+
+## What was verified against real data
+- **diff_symbols**: hunks from `git diff -U0 -M` mapped to the innermost symbol of head (and old side to base for removals). Spot-checked against raw hunks (BULKIO_UNDO_ADOPTION: 4 commits, 15 Java files -> 22 added / 16 modified / 4 removed symbols, 11 new public methods).
+- **JaCoCo adapter**: for `MXNUtil.java` the tool reports not-tested lines 1151-1152 and `CustomModuleUtil.java` 9833-9834; the adapter returns exactly `1151-1152` and `9833-9834` as missed (9832 partial). 3,440 / 7,716 lines parsed per file; 404 -> "absent"; results cached per (report, file).
+- **JS adapter + diff mapping**: using the 92 missed ranges of report 8539 against branch `APINAME_INCLUSION_MODULE_BUILDER`, evaluated at the report's commit: **468 of the tool's 471 missed lines fall inside our independently computed git diff** (3 outside = edge lines of ranges). This validates both line mapping and the commit gate logic.
+- **Commit gate caught real drift**: the branch tip (22d7ea779c) is ahead of the report's commit (d5589beb84). Plain mode correctly marks the big `CrmModuleBuilder.js` as *unverifiable* (987 lines) instead of trusting it; `at_report_commit=true` evaluates exactly at the report commit (gate = match).
+- Eval/regressions: seed eval unchanged (recall@10 1.0).
+
+## Important limits (stated by the tools themselves)
+- **JS report lists only missed ranges.** Lines not listed are shown as `inferred`, never counted as covered (comments/blank lines included). QA annotations (Covered / No Need To Cover) are surfaced separately (`qa_covered`, `qa_waived`).
+- **Java**: lines with no JaCoCo span are non-executable and excluded; classes absent from the report are `not_in_report`.
+- **impact_tests has no per-test coverage.** Method = lexical identifier match against test files in the repo + QA scenario text from ingested reports. zohocrm contains only ~56-62 test-ish files, none of which referenced the BULKIO changes, so the tool says "none found" and notes QA automation likely lives elsewhere. This is honest but NOT yet useful for QA impact.
+- `compare_description` is heuristic (identifier names and module words only).
+
+## Blocked / needs your input
+1. **`core_library` repo**: the Java impact report (`report_202611201336520228`, MXNUtil etc.) belongs to `core_library`, which is NOT at `.../zohocorp/CRM/core_library.git` (repo not found). Need its real clone URL; then add it to `REPOS` and the Java path can be tested end to end (adapter and gate are already verified on the report data; only the repo mapping is missing).
+2. **QA automation repo**: needed for useful `impact_tests` (pass as another repo + test-path regex via config). Without it only scenario text from past reports is available.
+3. **JS coverage API credentials** (token or service account). Today it needs a browser session cookie. Live ingestion was not exercised: the Chrome extension was disconnected, so the JS fixture was rebuilt from the 92 ranges read earlier (statuses unknown except one sample case).
+4. Java report -> commit: JaCoCo HTML carries no branch/commit; pass `report_commit` or register via `ingest_coverage(kind=jacoco, commit=...)`, or get the authenticated `getcodecoverageiddetails` endpoint.
+
+## Next
+- Phase 4: auth (Zoho SSO -> repo access), webhooks / polling, AppSail or internal-host deploy (Phase 0 spike still outstanding), master auto-refresh, branch eviction.
+- Add coverage fixtures to a committed test directory (currently `server/scratch/`, gitignored) and a small automated test suite.

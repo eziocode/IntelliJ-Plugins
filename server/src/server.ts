@@ -1,34 +1,59 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, statSync, existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { openDb, type Db } from "./db.js";
-import { BASE, ensureIndexed, isIndexed, isIndexing, jobStatus, listBranches, waitFor } from "./branches.js";
+import { BASE, ensureIndexed, ensureReady, isIndexed, isIndexing, jobStatus, listBranches, waitFor } from "./branches.js";
 import { formatCards, searchSymbols } from "./search.js";
 import { getSymbol } from "./symbol.js";
+import { diffSymbols } from "./diff.js";
+import { changeSummary, formatDiffSymbols, formatSummary } from "./summary.js";
+import { coverageGap, formatGap, type GapKind } from "./gap.js";
+import { covConfigFromEnv, ingestJsReport } from "./coverage.js";
+import { compareDescription, formatDescriptionCheck, formatImpact, impactTests } from "./impact.js";
 
-const REPO = process.env.REPO_DIR ?? "";
 const DATA = process.env.DATA_DIR ?? "data";
 const PORT = Number(process.env.PORT ?? 8787);
 const TOKEN = process.env.MCP_TOKEN ?? "";
 const WAIT_MS = Number(process.env.SWITCH_WAIT_MS ?? 25_000);
-if (!REPO) { console.error("REPO_DIR (path to the git mirror) is required"); process.exit(1); }
 mkdirSync(DATA, { recursive: true });
-const dbFile = `${DATA}/index.sqlite`;
-const db: Db = openDb(dbFile);
+
+interface Repo { name: string; dir: string; db: Db; file: string }
+const repos = new Map<string, Repo>();
+{
+  // REPOS="zohocrm=/path/mirror,core_library=/path/mirror2"  (or legacy REPO_DIR + REPO_NAME)
+  const spec = process.env.REPOS ?? (process.env.REPO_DIR ? `${process.env.REPO_NAME ?? "zohocrm"}=${process.env.REPO_DIR}` : "");
+  for (const part of spec.split(",").map((x) => x.trim()).filter(Boolean)) {
+    const i = part.indexOf("=");
+    const name = part.slice(0, i), dir = part.slice(i + 1);
+    if (!/^[\w.-]+$/.test(name) || !dir) { console.error(`bad REPOS entry: ${part}`); process.exit(1); }
+    const file = `${DATA}/${name}.sqlite`;
+    repos.set(name, { name, dir, db: openDb(file), file });
+  }
+  if (!repos.size) { console.error("REPOS (name=path[,name=path]) or REPO_DIR is required"); process.exit(1); }
+}
+const defaultRepo = [...repos.keys()][0];
+const cov = covConfigFromEnv();
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
+const SAFE_ID = /^[\w.-]+$/;
+const SHA = /^[0-9a-f]{7,40}$/i;
 
-interface Session { branch: string }
+interface Session { repo: string; branches: Record<string, string> }
 
 function buildServer(session: Session): McpServer {
-  const srv = new McpServer({ name: "crm-index", version: "0.1.0" });
+  const srv = new McpServer({ name: "crm-index", version: "0.2.0" });
 
-  const resolveBranch = (b?: string) => b ?? session.branch;
-  const notReady = (b: string) => `Branch "${b}" is not indexed yet. Call switch_branch("${b}") first${b === BASE ? " (master is still warming up; check index_status)" : ""}.`;
+  const pick = (name?: string): Repo | string => {
+    const r = repos.get(name ?? session.repo);
+    return r ?? `unknown repo "${name}". Available: ${[...repos.keys()].join(", ")}`;
+  };
+  const active = (r: Repo, b?: string) => b ?? session.branches[r.name] ?? BASE;
+  const repoArg = z.string().optional().describe(`Repository (default "${defaultRepo}"; available: ${[...repos.keys()].join(", ")})`);
+  const guard = (fn: () => Promise<ReturnType<typeof text>>) => fn().catch((e: Error) => text(`error: ${e.message.split("\n")[0]}`, true));
 
   srv.registerTool("get_code_context", {
     description: "Search the CRM codebase (Java + JS) by natural language or identifiers. Returns ranked symbol CARDS (id, signature, path:lines), not code bodies. Pick the relevant ids, then call get_symbol(id) for the body. Searches the session's active branch unless `branch` is given.",
@@ -36,76 +61,152 @@ function buildServer(session: Session): McpServer {
       query: z.string().describe("Keywords or identifiers, e.g. 'validate api name custom field'"),
       limit: z.number().int().min(1).max(30).optional().describe("Max cards (default 8)"),
       path: z.string().optional().describe("Only paths containing this substring, e.g. 'CRMClient/mixins'"),
-      branch: z.string().optional(),
+      branch: z.string().optional(), repo: repoArg,
     },
-  }, async ({ query, limit, path, branch }) => {
-    const b = resolveBranch(branch);
-    if (!isIndexed(db, b)) return text(notReady(b), true);
-    const { cards, mode } = searchSymbols(db, b, query, limit ?? 8, path);
-    if (!cards.length) return text(`No symbols matched on ${b}. Try fewer or different keywords.`);
-    return text(`branch=${b} match=${mode} results=${cards.length}${isIndexing(b) ? "\nWARNING: this branch is still being indexed; results may be incomplete. Check index_status." : ""}\n${formatCards(cards)}`);
+  }, async ({ query, limit, path, branch, repo }) => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const b = active(r, branch);
+    if (!isIndexed(r.db, b)) return text(`Branch "${b}" is not indexed yet in ${r.name}. Call switch_branch("${b}") first.`, true);
+    const { cards, mode } = searchSymbols(r.db, b, query, limit ?? 8, path);
+    if (!cards.length) return text(`No symbols matched on ${r.name}:${b}. Try fewer or different keywords.`);
+    return text(`repo=${r.name} branch=${b} match=${mode} results=${cards.length}${isIndexing(r.dir, b) ? "\nWARNING: this branch is still being indexed; results may be incomplete. Check index_status." : ""}\n${formatCards(cards)}`);
   });
 
   srv.registerTool("get_symbol", {
     description: "Full source of one symbol by id from get_code_context (with line numbers). For a class/interface/enum it returns a member outline instead; search a member for its body.",
-    inputSchema: { id: z.string(), max_lines: z.number().int().min(10).max(2000).optional(), branch: z.string().optional() },
-  }, async ({ id, max_lines, branch }) => {
-    const r = getSymbol(db, REPO, id, resolveBranch(branch), max_lines ?? 150);
-    return text(r.text, !r.ok);
+    inputSchema: { id: z.string(), max_lines: z.number().int().min(10).max(2000).optional(), branch: z.string().optional(), repo: repoArg },
+  }, async ({ id, max_lines, branch, repo }) => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const x = getSymbol(r.db, r.dir, id, active(r, branch), max_lines ?? 150);
+    return text(x.text, !x.ok);
   });
 
   srv.registerTool("list_branches", {
     description: "List repository branches (newest first), optionally filtered by substring. The repo has ~18k branches, so always filter. Shows which are already indexed.",
-    inputSchema: { contains: z.string().optional(), limit: z.number().int().min(1).max(100).optional() },
-  }, async ({ contains, limit }) => {
-    const r = listBranches(db, REPO, contains ?? "", limit ?? 25);
-    const lines = r.branches.map((b) => `${b.indexed ? "*" : " "} ${b.name}${b.date ? `  (${b.date})` : ""}`);
-    return text(`${r.matched}/${r.total} branches match${r.matched > r.branches.length ? `, showing ${r.branches.length}` : ""}  (* = indexed)\n${lines.join("\n")}`);
+    inputSchema: { contains: z.string().optional(), limit: z.number().int().min(1).max(100).optional(), repo: repoArg },
+  }, async ({ contains, limit, repo }) => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const x = listBranches(r.db, r.dir, contains ?? "", limit ?? 25);
+    const lines = x.branches.map((b) => `${b.indexed ? "*" : " "} ${b.name}${b.date ? `  (${b.date})` : ""}`);
+    return text(`${x.matched}/${x.total} branches match${x.matched > x.branches.length ? `, showing ${x.branches.length}` : ""}  (* = indexed)\n${lines.join("\n")}`);
   });
 
   srv.registerTool("switch_branch", {
-    description: "Make a branch the active one for this session, fetching and indexing it if needed (only its changed files are re-embedded/parsed; unchanged blobs are shared with master). May take a few seconds on first use.",
-    inputSchema: { branch: z.string() },
-  }, async ({ branch }) => {
-    if (isIndexed(db, branch)) { session.branch = branch; return text(`active branch = ${branch} (already indexed)`); }
-    const job = ensureIndexed(db, REPO, branch);
+    description: "Make a branch the active one for this session (per repo), fetching and indexing it if needed. Only changed files are parsed; unchanged blobs are shared with master. May take a few seconds on first use.",
+    inputSchema: { branch: z.string(), repo: repoArg },
+  }, async ({ branch, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    if (isIndexed(r.db, branch) && !isIndexing(r.dir, branch)) { session.branches[r.name] = branch; session.repo = r.name; return text(`active ${r.name} branch = ${branch} (already indexed)`); }
+    const job = ensureIndexed(r.db, r.dir, branch);
     const done = await waitFor(job, WAIT_MS);
     if (done && job.state === "error") return text(`Could not index "${branch}": ${job.error}`, true);
-    if (!done) { session.branch = branch; return text(`Indexing "${branch}" is still running (started ${Math.round((Date.now() - job.startedAt) / 1000)}s ago). It is now your active branch; call index_status, then retry searches.`); }
-    session.branch = branch;
-    const r = job.report!;
-    return text(`active branch = ${branch}. indexed in ${(r.ms / 1000).toFixed(1)}s: ${r.files} files, ${r.newBlobs} new blobs parsed, ${r.reusedBlobs} reused, +${r.symbols} symbols.`);
-  });
+    session.branches[r.name] = branch; session.repo = r.name;
+    if (!done) return text(`Indexing "${branch}" is still running (${Math.round((Date.now() - job.startedAt) / 1000)}s so far). It is now your active branch; call index_status, then retry searches.`);
+    const x = job.report!;
+    return text(`active ${r.name} branch = ${branch}. indexed in ${(x.ms / 1000).toFixed(1)}s: ${x.files} files, ${x.newBlobs} new blobs parsed, ${x.reusedBlobs} reused, +${x.symbols} symbols.`);
+  }));
 
   srv.registerTool("reindex", {
     description: "Fetch the latest commits for a branch (default: the active one) and update its index. Use after someone pushes.",
-    inputSchema: { branch: z.string().optional() },
-  }, async ({ branch }) => {
-    const b = resolveBranch(branch);
-    const job = ensureIndexed(db, REPO, b, { refresh: true });
+    inputSchema: { branch: z.string().optional(), repo: repoArg },
+  }, async ({ branch, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const b = active(r, branch);
+    const job = ensureIndexed(r.db, r.dir, b, { refresh: true });
     const done = await waitFor(job, WAIT_MS);
     if (!done) return text(`Reindex of "${b}" is running; check index_status.`);
     if (job.state === "error") return text(`Reindex failed: ${job.error}`, true);
-    const r = job.report!;
-    return text(`${b} up to date: ${r.newBlobs} new blobs parsed, ${r.reusedBlobs} reused, +${r.symbols} symbols, ${(r.ms / 1000).toFixed(1)}s.`);
-  });
+    const x = job.report!;
+    return text(`${r.name}:${b} up to date: ${x.newBlobs} new blobs parsed, ${x.reusedBlobs} reused, +${x.symbols} symbols, ${(x.ms / 1000).toFixed(1)}s.`);
+  }));
 
   srv.registerTool("index_status", {
-    description: "Index health: which branches are indexed, symbol counts, running jobs, and this session's active branch.",
+    description: "Index health per repo: which branches are indexed, symbol counts, running jobs, and this session's active branches.",
     inputSchema: {},
   }, async () => {
-    const refs = db.prepare("SELECT ref, COUNT(*) files FROM manifest GROUP BY ref ORDER BY ref").all() as { ref: string; files: number }[];
-    const n = (db.prepare("SELECT COUNT(*) c FROM symbols").get() as { c: number }).c;
-    const when = (r: string) => (db.prepare("SELECT v FROM meta WHERE k=?").get(`indexed:${r}`) as { v: string } | undefined)?.v ?? "?";
+    const out: string[] = [`session repo: ${session.repo}`];
+    for (const r of repos.values()) {
+      const refs = r.db.prepare("SELECT ref, COUNT(*) files FROM manifest WHERE ref NOT LIKE 'commit:%' GROUP BY ref ORDER BY ref").all() as { ref: string; files: number }[];
+      const n = (r.db.prepare("SELECT COUNT(*) c FROM symbols").get() as { c: number }).c;
+      out.push(`[${r.name}] active branch: ${session.branches[r.name] ?? BASE}  symbols: ${n}  db: ${(statSync(r.file).size / 1048576).toFixed(0)} MiB`);
+      for (const x of refs.slice(0, 30)) out.push(`  ${x.ref}  ${x.files} files`);
+    }
     const js = jobStatus().filter((j) => j.state !== "done");
-    return text([
-      `active branch: ${session.branch}`,
-      `symbols: ${n}, db: ${(statSync(dbFile).size / 1048576).toFixed(0)} MiB`,
-      `indexed refs (${refs.length}):`,
-      ...refs.slice(0, 40).map((r) => `  ${r.ref}  ${r.files} files  indexed ${when(r.ref)}`),
-      js.length ? `jobs: ${js.map((j) => `${j.ref}=${j.state}${j.error ? `(${j.error})` : ""}`).join(", ")}` : "jobs: none",
-    ].join("\n"));
+    out.push(js.length ? `jobs: ${js.map((j) => `${j.ref}=${j.state}${j.error ? `(${j.error})` : ""}`).join(", ")}` : "jobs: none");
+    out.push(`coverage sources: jacoco=${cov.jacocoBase ? "configured" : "not configured"} js=${cov.jsBase || cov.fixtureDir ? "configured" : "not configured"}`);
+    return text(out.join("\n"));
   });
+
+  // ---------- QA tools ----------
+  const range = {
+    base: z.string().optional().describe(`Base branch (default ${BASE}); the diff is merge-base(base, head)..head`),
+    head: z.string().optional().describe("Head branch (default: active branch)"),
+    repo: repoArg,
+  };
+
+  srv.registerTool("diff_symbols", {
+    description: "Ground-truth list of CHANGED symbols (methods/functions/classes) between base and head, derived from git diff hunks mapped onto the symbol index: added / modified / removed / class_level (fields, constants, imports). Use this instead of asking the developer what changed.",
+    inputSchema: range,
+  }, async ({ base, head, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const b = base ?? BASE, h = active(r, head);
+    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
+    return text(formatDiffSymbols(diffSymbols(r.db, r.dir, b, h), 80));
+  }));
+
+  srv.registerTool("change_summary", {
+    description: "Structured facts about a branch change: commits (sha+subject), files by status/type, modules touched, symbol counts, added/removed public Java API, tests touched, largest changes. Cross-check the developer's check-in description against this.",
+    inputSchema: range,
+  }, async ({ base, head, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const b = base ?? BASE, h = active(r, head);
+    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
+    return text(formatSummary(changeSummary(r.db, r.dir, b, h)));
+  }));
+
+  srv.registerTool("compare_description", {
+    description: "Heuristically compare a developer's check-in description with the actual diff: identifiers named but absent from the diff, and modules changed but never mentioned. Heuristic only; verify flagged items by hand.",
+    inputSchema: { description: z.string().min(5), ...range },
+  }, async ({ description, base, head, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const b = base ?? BASE, h = active(r, head);
+    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
+    return text(formatDescriptionCheck(compareDescription(diffSymbols(r.db, r.dir, b, h), description)));
+  }));
+
+  srv.registerTool("ingest_coverage", {
+    description: "Register/refresh a coverage report. kind=js pulls the JS coverage API (needs server-side credentials) and stores missed ranges with branch+commit. kind=jacoco records the report's branch/commit so coverage_gap can gate on it (Java line data is fetched lazily per file).",
+    inputSchema: { kind: z.enum(["js", "jacoco"]), report: z.string().regex(SAFE_ID), branch: z.string().optional(), commit: z.string().regex(SHA).optional(), refresh: z.boolean().optional(), repo: repoArg },
+  }, async ({ kind, report, branch, commit, refresh, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    if (kind === "js") {
+      const m = await ingestJsReport(r.db, cov, report, refresh ?? false);
+      return text(`js report ${report}: branch=${m.branch ?? "?"} commit=${m.commit?.slice(0, 10) ?? "?"} build=${m.build ?? "?"} missed-case ranges=${m.total}`);
+    }
+    r.db.prepare("INSERT OR REPLACE INTO cov_report VALUES (?,?,?,?,?,?)").run(report, "jacoco", branch ?? null, commit ?? null, new Date().toISOString(), "{}");
+    return text(`jacoco report ${report} registered: branch=${branch ?? "?"} commit=${commit?.slice(0, 10) ?? "none (pass commit for the commit gate)"}`);
+  }));
+
+  srv.registerTool("coverage_gap", {
+    description: "Which CHANGED lines/methods no test executed, per a coverage report. Computes changed lines from git (not from the developer), maps them onto the report, and gates on the report's commit: files that differ between the report's commit and head are flagged unverifiable. Set at_report_commit=true to evaluate exactly at the report's commit. Cross-checks the JS tool's own missed list.",
+    inputSchema: { kind: z.enum(["js", "jacoco"]), report: z.string().regex(SAFE_ID), report_commit: z.string().regex(SHA).optional(), at_report_commit: z.boolean().optional(), ...range },
+  }, async ({ kind, report, report_commit, at_report_commit, base, head, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const b = base ?? BASE, h = active(r, head);
+    await ensureReady(r.db, r.dir, h);
+    const res = await coverageGap(r.db, r.dir, cov, { base: b, head: h, kind: kind as GapKind, report, reportCommit: report_commit, atReportCommit: at_report_commit });
+    return text(formatGap(res));
+  }));
+
+  srv.registerTool("impact_tests", {
+    description: "Likely-affected tests for a change. METHOD: lexical identifier match between changed symbols and test files in this repo, plus QA scenario text from previously ingested coverage reports on overlapping lines. There is NO per-test coverage, so this is a guess and says so; if the repo has no tests, QA automation lives elsewhere.",
+    inputSchema: range,
+  }, async ({ base, head, repo }) => guard(async () => {
+    const r = pick(repo); if (typeof r === "string") return text(r, true);
+    const b = base ?? BASE, h = active(r, head);
+    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
+    return text(formatImpact(await impactTests(r.db, r.dir, b, h)));
+  }));
 
   return srv;
 }
@@ -138,7 +239,7 @@ const http = createServer(async (req, res) => {
         onsessioninitialized: (id) => { transports.set(id, transport); },
       });
       transport.onclose = () => { if (transport.sessionId) transports.delete(transport.sessionId); };
-      await buildServer({ branch: BASE }).connect(transport);
+      await buildServer({ repo: defaultRepo, branches: {} }).connect(transport);
       t = transport;
     }
     await t.handleRequest(req, res, body);
@@ -149,6 +250,6 @@ const http = createServer(async (req, res) => {
 });
 
 http.listen(PORT, () => {
-  console.error(`crm-index MCP on :${PORT}/mcp  repo=${REPO}  data=${DATA}`);
-  if (!isIndexed(db, BASE)) { console.error("master not indexed: starting initial index"); ensureIndexed(db, REPO, BASE, { fetch: false }); }
+  console.error(`crm-index MCP on :${PORT}/mcp  repos=${[...repos.values()].map((r) => `${r.name}=${r.dir}`).join(",")}  data=${DATA}`);
+  for (const r of repos.values()) if (!isIndexed(r.db, BASE)) { console.error(`${r.name}: master not indexed, starting initial index`); ensureIndexed(r.db, r.dir, BASE, { fetch: false }); }
 });

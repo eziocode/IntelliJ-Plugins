@@ -23,10 +23,17 @@ export function openDb(file: string): Db {
       sig TEXT, doc TEXT, sl INTEGER, el INTEGER
     );
     CREATE INDEX IF NOT EXISTS symbols_blob ON symbols(blob);
+    CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name);
     CREATE TABLE IF NOT EXISTS manifest (
       ref TEXT NOT NULL, path TEXT NOT NULL, blob TEXT NOT NULL, PRIMARY KEY (ref, path)
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS manifest_blob ON manifest(blob, ref);
+    -- coverage data is NOT rebuildable from git, so it lives outside the schema-version drop list
+    CREATE TABLE IF NOT EXISTS cov_report (id TEXT PRIMARY KEY, kind TEXT, branch TEXT, commit_sha TEXT, fetched_at TEXT, meta TEXT);
+    CREATE TABLE IF NOT EXISTS cov_file (report TEXT NOT NULL, file TEXT NOT NULL, status TEXT, fetched_at TEXT, PRIMARY KEY (report, file)) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS cov_line (report TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY (report, file, line)) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS cov_case (report TEXT NOT NULL, file TEXT NOT NULL, sl INTEGER, el INTEGER, category TEXT, status TEXT, description TEXT, commits TEXT);
+    CREATE INDEX IF NOT EXISTS cov_case_file ON cov_case(file);
     CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(name, path, sig, doc, content='', tokenize='unicode61');
   `);
   return db;

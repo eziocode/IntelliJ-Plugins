@@ -1,5 +1,6 @@
 import type { Db } from "./db.js";
 import { git } from "./git.js";
+import { gitRefOf } from "./diff.js";
 import { indexRef, type IndexReport } from "./indexer.js";
 
 export const BASE = "master";
@@ -37,8 +38,10 @@ type Job = { ref: string; state: "queued" | "running" | "done" | "error"; starte
 const jobs = new Map<string, Job>();
 let queue: Promise<unknown> = Promise.resolve(); // single writer: one index job at a time
 
-export function isIndexing(ref: string): boolean {
-  const j = jobs.get(ref);
+const jkey = (repo: string, ref: string) => `${repo}|${ref}`;
+
+export function isIndexing(repo: string, ref: string): boolean {
+  const j = jobs.get(jkey(repo, ref));
   return !!j && (j.state === "queued" || j.state === "running");
 }
 
@@ -48,16 +51,19 @@ export function jobStatus(): Omit<Job, "promise">[] {
 
 /** Fetch just this branch (never all 17k) and index its manifest; blobs already known are reused. Dedupes concurrent calls per ref. */
 export function ensureIndexed(db: Db, repo: string, branch: string, opts: { refresh?: boolean; fetch?: boolean } = {}): Job {
-  const running = jobs.get(branch);
+  const running = jobs.get(jkey(repo, branch));
   if (running && (running.state === "queued" || running.state === "running")) return running;
   const job: Job = { ref: branch, state: "queued", startedAt: Date.now(), promise: Promise.resolve() };
   const p: Promise<void> = queue.then(async () => {
     job.state = "running";
     try {
-      if (opts.fetch !== false && (opts.refresh || !isIndexed(db, branch))) {
+      if (branch.startsWith("commit:")) {
+        const sha = branch.slice(7);
+        try { git(repo, ["cat-file", "-e", `${sha}^{commit}`]); } catch { git(repo, ["fetch", "--no-tags", "--quiet", "origin", sha]); }
+      } else if (opts.fetch !== false && (opts.refresh || !isIndexed(db, branch))) {
         git(repo, ["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
       }
-      job.report = await indexRef(db, repo, `refs/remotes/origin/${branch}`, undefined, branch);
+      job.report = await indexRef(db, repo, gitRefOf(branch), undefined, branch);
       job.state = "done";
     } catch (e) {
       job.state = "error";
@@ -66,7 +72,7 @@ export function ensureIndexed(db: Db, repo: string, branch: string, opts: { refr
   });
   queue = p;
   job.promise = p;
-  jobs.set(branch, job);
+  jobs.set(jkey(repo, branch), job);
   return job;
 }
 
@@ -74,4 +80,12 @@ export function ensureIndexed(db: Db, repo: string, branch: string, opts: { refr
 export async function waitFor(job: Job, ms: number): Promise<boolean> {
   await Promise.race([job.promise, new Promise((r) => setTimeout(r, ms))]);
   return job.state === "done" || job.state === "error";
+}
+
+/** Index (if needed) and wait for completion. Throws on failure. */
+export async function ensureReady(db: Db, repo: string, label: string): Promise<void> {
+  if (isIndexed(db, label) && !isIndexing(repo, label)) return;
+  const job = ensureIndexed(db, repo, label);
+  await job.promise;
+  if (job.state === "error") throw new Error(`could not index ${label}: ${job.error}`);
 }
