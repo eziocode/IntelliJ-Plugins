@@ -6,19 +6,20 @@
   "scripts": {
     "build": "tsc -p .",
     "index": "tsx src/cli.ts index",
-    "stats": "tsx src/cli.ts stats"
+    "stats": "tsx src/cli.ts stats",
+    "start": "node deploy/bootstrap.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^13.2.0",
     "tree-sitter-wasms": "^0.1.13",
     "web-tree-sitter": "^0.22.6",
-    "zod": "^4.6.7"
+    "zod": "^4.6.7",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.6",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
 }

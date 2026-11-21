@@ -56,7 +56,9 @@ export function missingBlobs(repo: string, shas: string[]): string[] {
 
 /** Fetch many blobs in a few round trips (promisor remote, by object id). Falls back silently: cat-file will lazy-fetch the rest. */
 export async function prefetchBlobs(repo: string, shas: string[], chunk = 2000): Promise<{ requested: number; ok: boolean }> {
-  const miss = missingBlobs(repo, shas);
+  // Requested shas are blobs new to the index, so nearly all are missing from a blobless mirror anyway.
+  // (A per-object "is it present" check needs GIT_NO_LAZY_FETCH, git >= 2.44; older git lazy-fetches each one.)
+  const miss = process.env.PREFETCH_CHECK_MISSING === "1" ? missingBlobs(repo, shas) : shas;
   let ok = true;
   for (let i = 0; i < miss.length; i += chunk) {
     const part = miss.slice(i, i + chunk);

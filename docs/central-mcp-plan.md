@@ -342,3 +342,24 @@ Master is always active. Any other branch is indexed on request, kept while used
 - The 30 s touch persist waits for a worker write lock if one is held (up to one batch).
 - A single 2-CPU instance shares CPU between the worker and searches; heavy parsing can slow searches even when the event loop is free.
 - Next steps if this shows up: move flush/persist into the worker; add a second worker for parallel branch builds; per-branch overlay files (see the scaling plan).
+
+---
+
+# M. CLOUD DEPLOYMENT + LOCAL SHIM (Catalyst AppSail, Development)
+
+- `crmindex` AppSail (CrmQaAutomation, Development): 2 GB memory, 1 GB disk, pinned to 1 instance.
+  Boot: `deploy/start.sh` (POSIX sh: the runtime uses dash) -> unpacks `deps.tgz` (the CLI does not upload
+  `node_modules`) -> `deploy/bootstrap.mjs` listens on the public port at once and proxies to the server; its
+  `/health` reports boot stage/errors while starting.
+- Mirror clone: master-only blobless, HTTP Basic auth with the account login as username (Bearer/Zoho schemes
+  are refused; the `repository.` host redirects to `zrepository.` and drops the header, so `GIT_REMOTE` points at
+  `zrepository.`). The header is stored in the mirror config so later fetches authenticate. git on AppSail is
+  2.43, so the missing-blob pre-check (needs `GIT_NO_LAZY_FETCH`, 2.44+) is skipped.
+- Cold start: clone + master index ~2 min (339,447 symbols). Disk is ephemeral; restarts repeat this.
+- **Gateway problem:** every `/mcp` POST gets a duplicate empty `400` from the Catalyst gateway (seen in the access
+  log, one instance). Plain JSON routes do not. So MCP stays local:
+- **REST API** (`/api/status|branches|search|symbol|switch|diff`, bearer `MCP_TOKEN`) + **local stdio shim**
+  (`shim/`) that exposes the same tools to AI clients. Verified end to end over stdio against the cloud.
+
+Open: rotate the MCP token (it was pasted in chat); Stratus snapshot restore or a min-1 warm instance to avoid the
+2-minute cold rebuild; `smoke.sh` `symbol` step misbehaves under macOS `sh` (endpoint verified directly).

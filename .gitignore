@@ -44,3 +44,4 @@ autodom-extension/.gitignore
 zohocrm-probe/
 server/node_modules/
 server/data/
+shim/node_modules/

@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -17,7 +17,7 @@ import { covConfigFromEnv, ingestJsReport } from "./coverage.js";
 import { compareDescription, formatDescriptionCheck, formatImpact, impactTests } from "./impact.js";
 
 const DATA = process.env.DATA_DIR ?? "data";
-const PORT = Number(process.env.PORT ?? 8787);
+const PORT = Number(process.env.X_ZOHO_CATALYST_LISTEN_PORT ?? process.env.PORT ?? 8787);
 const TOKEN = process.env.MCP_TOKEN ?? "";
 const WAIT_MS = Number(process.env.SWITCH_WAIT_MS ?? 25_000);
 mkdirSync(DATA, { recursive: true });
@@ -175,9 +175,82 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : undefined;
 }
 
+// ---------- plain JSON API (for a local MCP shim; avoids the /mcp session path) ----------
+const json = (res: import("node:http").ServerResponse, code: number, obj: unknown) => {
+  res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(obj));
+};
+
+async function handleApi(path: string, req: IncomingMessage, res: import("node:http").ServerResponse): Promise<void> {
+  const q = new URL(req.url ?? "/", "http://x").searchParams;
+  const b = (req.method === "POST" ? ((await readJson(req)) ?? {}) : {}) as Record<string, any>;
+  const get = (k: string) => q.get(k) ?? undefined;
+  const pickRepo = (name?: string): Repo | null => repos.get(name ?? defaultRepo) ?? null;
+
+  if (path === "/api/status" && req.method === "GET") {
+    const out = [];
+    for (const r of repos.values()) {
+      const refs = r.db.prepare("SELECT ref, COUNT(*) files FROM v_manifest WHERE ref NOT LIKE 'commit:%' GROUP BY ref ORDER BY ref").all();
+      out.push({ repo: r.name, symbols: (r.db.prepare("SELECT COUNT(*) c FROM symbols").get() as { c: number }).c, refs, budgetMiB: BUDGET_BYTES / 1048576 });
+    }
+    const rd = (f: string) => { try { return readFileSync(f, "utf8").slice(0, 600); } catch { return null; } };
+    const mirrors = [...repos.values()].map((r) => ({ repo: r.name, dir: r.dir, objects: existsSync(`${r.dir}/objects`) }));
+    return json(res, 200, { ok: true, repos: out, mirrors, cloneStatus: rd("/tmp/crm-index/mirror.status"), cloneErr: rd("/tmp/crm-index/clone.err"), jobs: jobStatus().filter((j) => j.state !== "done") });
+  }
+
+  if (path === "/api/branches" && req.method === "GET") {
+    const r = pickRepo(get("repo")); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
+    const x = listBranches(r.db, r.dir, get("contains") ?? "", Number(get("limit") ?? 25));
+    return json(res, 200, { ok: true, total: x.total, matched: x.matched, branches: x.branches });
+  }
+
+  if (path === "/api/search" && req.method === "POST") {
+    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
+    const branch = b.branch ?? BASE;
+    if (!isIndexed(r.db, branch)) return json(res, 409, { ok: false, error: `branch "${branch}" not indexed`, hint: "POST /api/switch first" });
+    touchRef(r.db, branch);
+    const { cards, mode } = searchSymbols(r.db, branch, String(b.query ?? ""), Math.min(Number(b.limit ?? 8), 30), b.path);
+    return json(res, 200, { ok: true, repo: r.name, branch, mode, cards, text: formatCards(cards), indexing: isIndexing(r.dir, branch) });
+  }
+
+  if (path === "/api/symbol" && req.method === "POST") {
+    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
+    const x = getSymbol(r.db, r.dir, String(b.id ?? ""), b.branch ?? BASE, Math.min(Number(b.max_lines ?? 150), 2000));
+    return json(res, x.ok ? 200 : 404, { ok: x.ok, text: x.text });
+  }
+
+  if (path === "/api/switch" && req.method === "POST") {
+    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
+    const branch = String(b.branch ?? "");
+    if (!branch) return json(res, 400, { ok: false, error: "branch required" });
+    if (isIndexed(r.db, branch) && !isIndexing(r.dir, branch)) return json(res, 200, { ok: true, status: "indexed", branch });
+    const job = ensureIndexed(r.db, r.dir, branch);
+    const done = await waitFor(job, WAIT_MS);
+    if (done && job.state === "error") return json(res, 500, { ok: false, error: job.error });
+    if (!done) return json(res, 202, { ok: true, status: "indexing", branch, progress: job.progress ?? null });
+    return json(res, 200, { ok: true, status: "indexed", branch, report: job.report });
+  }
+
+  if (path === "/api/diff" && req.method === "POST") {
+    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
+    const base = b.base ?? BASE, head = b.head;
+    if (!head) return json(res, 400, { ok: false, error: "head required" });
+    await ensureReady(r.db, r.dir, base); await ensureReady(r.db, r.dir, head);
+    const d = diffSymbols(r.db, r.dir, base, head);
+    return json(res, 200, { ok: true, base, head, symbols: d.symbols, files: d.files.map((f) => f.path), text: formatDiffSymbols(d, Number(b.limit ?? 200)) });
+  }
+
+  return json(res, 404, { ok: false, error: `no route ${req.method} ${path}` });
+}
+
 const http = createServer(async (req, res) => {
   try {
     if (req.url === "/health") { res.writeHead(200).end("ok"); return; }
+    const path = req.url?.split("?")[0] ?? "";
+    if (path.startsWith("/api/")) {
+      if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) { json(res, 401, { ok: false, error: "unauthorized" }); return; }
+      await handleApi(path, req, res);
+      return;
+    }
     if (req.url?.split("?")[0] !== "/mcp") { res.writeHead(404).end(); return; }
     if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) { res.writeHead(401).end("unauthorized"); return; }
     const sid = req.headers["mcp-session-id"] as string | undefined;
@@ -212,6 +285,15 @@ http.listen(PORT, () => {
   const sweepMs = Number(process.env.SWEEP_MIN ?? 60) * 60_000;
   setInterval(() => { for (const r of repos.values()) { const d = flushIdle(r.db, r.dir); if (d.length) console.error(`${r.name}: flushed idle ${d.join(", ")}`); } }, sweepMs).unref();
   console.error(`idle flush: branches unused for ${IDLE_TTL_MS / 3600_000} h are dropped, sweep every ${sweepMs / 60_000} min`);
+  // mirror may still be cloning at boot: retry master indexing until it exists (no-op once master is indexed)
+  setInterval(() => {
+    for (const r of repos.values()) {
+      if (!isIndexed(r.db, BASE) && existsSync(`${r.dir}/objects`) && !isIndexing(r.dir, BASE)) {
+        console.error(`${r.name}: mirror present, indexing master`);
+        ensureIndexed(r.db, r.dir, BASE, { fetch: false });
+      }
+    }
+  }, 30_000).unref();
   // PRELOAD_REFS=refs... (comma-separated branch names) are indexed in the background at boot, e.g. the team's default branches
   const preload = (process.env.PRELOAD_REFS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
   for (const r of repos.values()) for (const b of preload) if (!isIndexed(r.db, b)) { console.error(`${r.name}: preloading ${b}`); ensureIndexed(r.db, r.dir, b); }

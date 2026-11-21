@@ -1,0 +1,15 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+const c = new Client({ name: "shim-test", version: "0" });
+await c.connect(new StdioClientTransport({ command: "node", args: ["index.mjs"], env: { ...process.env } }));
+console.log("tools:", (await c.listTools()).tools.map((t) => t.name).join(", "));
+const call = async (name, args, n = 6) => { const t0 = Date.now(); const r = await c.callTool({ name, arguments: args }); console.log(`\n### ${name} ${JSON.stringify(args)} (${Date.now() - t0}ms)${r.isError ? " ERROR" : ""}\n${r.content[0].text.split("\n").slice(0, n).join("\n")}`); return r.content[0].text; };
+await call("index_status", {});
+const ctx = await call("get_code_context", { query: "validate api name for custom button", limit: 3 });
+const id = /\[([0-9a-z]+\.[0-9a-f]{5})\]/.exec(ctx)?.[1];
+await call("get_symbol", { id, max_lines: 12 });
+await call("list_branches", { contains: "BULKIO", limit: 3 });
+await call("switch_branch", { branch: "BULKIO_UNDO_ADOPTION" });
+await call("diff_symbols", {}, 4);
+await call("get_code_context", { query: "rollback import", limit: 2 });
+await c.close();
