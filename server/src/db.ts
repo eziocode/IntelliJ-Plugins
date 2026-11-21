@@ -10,6 +10,8 @@ export function openDb(file: string): Db {
   const db = new Database(file);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
+  // a writer (index worker, touch, flush) waits for the lock instead of failing with SQLITE_BUSY
+  db.pragma("busy_timeout = 30000");
   db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)");
   const cur = (db.prepare("SELECT v FROM meta WHERE k='schema'").get() as { v: string } | undefined)?.v;
   if (cur !== SCHEMA_VERSION) {

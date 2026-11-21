@@ -7,7 +7,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { openDb, type Db } from "./db.js";
 import { BASE, ensureIndexed, ensureReady, evictionLog, flushIdle, isIndexed, isIndexing, jobStatus, listBranches, waitFor, BUDGET_BYTES, IDLE_TTL_MS } from "./branches.js";
-import { touchRef, usedBytes } from "./evict.js";
+import { persistTouches, touchRef, usedBytes } from "./evict.js";
 import { formatCards, searchSymbols } from "./search.js";
 import { getSymbol } from "./symbol.js";
 import { diffSymbols } from "./diff.js";
@@ -255,6 +255,8 @@ const http = createServer(async (req, res) => {
 http.listen(PORT, () => {
   console.error(`crm-index MCP on :${PORT}/mcp  repos=${[...repos.values()].map((r) => `${r.name}=${r.dir}`).join(",")}  data=${DATA}`);
   for (const r of repos.values()) if (!isIndexed(r.db, BASE)) { console.error(`${r.name}: master not indexed, starting initial index`); ensureIndexed(r.db, r.dir, BASE, { fetch: false }); }
+  // persist LRU clock every 30 s (request path only touches memory)
+  setInterval(() => { for (const r of repos.values()) persistTouches(r.db); }, 30_000).unref();
   // idle flush: every SWEEP_MIN minutes drop branches unused for IDLE_TTL_HOURS (default 48 h); master is always kept
   const sweepMs = Number(process.env.SWEEP_MIN ?? 60) * 60_000;
   setInterval(() => { for (const r of repos.values()) { const d = flushIdle(r.db, r.dir); if (d.length) console.error(`${r.name}: flushed idle ${d.join(", ")}`); } }, sweepMs).unref();

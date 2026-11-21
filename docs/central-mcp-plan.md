@@ -322,3 +322,23 @@ Bodies: all master code bodies are 404 MiB raw and **83 MiB** deflated (ratio 0.
 
 ## K6. Files
 `server/src/db.ts` (v4 schema, packing), `src/indexer.ts`, `src/symbol.ts` (reads bodies), `src/evict.ts` (LRU budget, GC), `src/git.ts` (`pruneRemoteRef`), `src/cli.ts` (`snapshot`, `restore`, `prune`, `mkdict`), `src/zdict.bin`, `deploy/boot.sh`, `deploy/snapshot.sh`.
+
+---
+
+# L. IDLE FLUSH + INDEX WORKER
+
+## L1. Idle policy (committed `5788857`)
+Master is always active. Any other branch is indexed on request, kept while used, and dropped after `IDLE_TTL_HOURS` (default 48) without use. An hourly sweep (`SWEEP_MIN`) drops idle refs and garbage-collects rows no other ref uses. Verified on a copy: idle refs dropped, master and the active branch kept.
+
+## L2. Index worker
+- Indexing (including `git fetch`) runs in a `worker_threads` worker with its own SQLite connection (`src/indexWorker.ts`, `src/indexPool.ts`). Readers keep working under WAL.
+- `busy_timeout` = 30 s, so writers wait for the lock instead of failing.
+- Request-path LRU touches are memory-only; persisted every 30 s (`persistTouches`).
+- Measured: a 24k-file branch index (805 new blobs, 12.6 s) ran while master searches continued. Worst search latency during the build: **24 ms** (was 967 ms with the index on the main thread, and 1.6 s before the touch and fetch moves).
+- Regression: seed eval recall@10 1.0, MRR 0.901; QA end-to-end (diff, summary, coverage gap, impact, error paths) all pass.
+
+## L3. Still on the main thread (known limits)
+- Idle flush and budget eviction run on the main thread. A large flush (many GC rows) can block for seconds.
+- The 30 s touch persist waits for a worker write lock if one is held (up to one batch).
+- A single 2-CPU instance shares CPU between the worker and searches; heavy parsing can slow searches even when the event loop is free.
+- Next steps if this shows up: move flush/persist into the worker; add a second worker for parallel branch builds; per-branch overlay files (see the scaling plan).

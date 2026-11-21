@@ -8,14 +8,25 @@ export function usedBytes(db: Db): number {
   return (pc - fl) * ps;
 }
 
-/** Record that a ref was used now (LRU clock). Cheap; call on every tool use that resolves a branch. */
-export function touchRef(db: Db, ref: string): void {
-  db.prepare("INSERT OR REPLACE INTO meta(k,v) VALUES (?,?)").run(`used:${ref}`, String(Date.now()));
+// Request path never writes: use times live in memory and are persisted by persistTouches() on a timer.
+const pendingTouch = new Map<string, number>();
+/** Record that a ref was used now (LRU clock). In-memory only; no database lock on the request path. */
+export function touchRef(_db: Db, ref: string): void {
+  pendingTouch.set(ref, Date.now());
+}
+/** Write pending use times to meta. Called by the server on a timer and before a flush sweep. */
+export function persistTouches(db: Db): number {
+  if (!pendingTouch.size) return 0;
+  const ins = db.prepare("INSERT OR REPLACE INTO meta(k,v) VALUES (?,?)");
+  const n = pendingTouch.size;
+  db.transaction(() => { for (const [ref, t] of pendingTouch) ins.run(`used:${ref}`, String(t)); })();
+  pendingTouch.clear();
+  return n;
 }
 
 export function lastUsed(db: Db, ref: string): number {
   const r = db.prepare("SELECT v FROM meta WHERE k=?").get(`used:${ref}`) as { v: string } | undefined;
-  return r ? Number(r.v) : 0;
+  return Math.max(r ? Number(r.v) : 0, pendingTouch.get(ref) ?? 0);
 }
 
 /** Remove one ref's manifest, then garbage-collect symbols/blobs/paths no ref references any more. */
@@ -61,6 +72,7 @@ export function enforceBudget(db: Db, budgetBytes: number, keep: Set<string>, ba
  * Base (master) and `keep` are never dropped. Returns the dropped refs.
  */
 export function sweepIdle(db: Db, maxIdleMs: number, keep: Set<string>, base = "master", now = Date.now()): string[] {
+  persistTouches(db);
   const names = (db.prepare("SELECT name FROM refs").all() as { name: string }[]).map((r) => r.name);
   const dropped: string[] = [];
   for (const n of names) {

@@ -3,6 +3,8 @@ import { git } from "./git.js";
 import { gitRefOf } from "./diff.js";
 import { enforceBudget, sweepIdle, touchRef } from "./evict.js";
 import { pruneRemoteRef } from "./git.js";
+import { execFileSync } from "node:child_process";
+import { indexInWorker } from "./indexPool.js";
 
 /** Index size budget (MiB of used SQLite pages). Least-recently-used branches are dropped beyond it. */
 export const BUDGET_BYTES = Number(process.env.INDEX_BUDGET_MB ?? 500) * 1048576;
@@ -55,7 +57,7 @@ export function isIndexed(db: Db, ref: string): boolean {
   return !!db.prepare("SELECT 1 FROM manifest m JOIN refs r ON r.id = m.ref_id WHERE r.name = ? LIMIT 1").get(ref);
 }
 
-type Job = { ref: string; state: "queued" | "running" | "done" | "error"; startedAt: number; report?: IndexReport; error?: string; promise: Promise<void> };
+type Job = { ref: string; state: "queued" | "running" | "done" | "error"; startedAt: number; report?: IndexReport; error?: string; progress?: { done: number; total: number }; promise: Promise<void> };
 const jobs = new Map<string, Job>();
 let queue: Promise<unknown> = Promise.resolve(); // single writer: one index job at a time
 
@@ -78,13 +80,16 @@ export function ensureIndexed(db: Db, repo: string, branch: string, opts: { refr
   const p: Promise<void> = queue.then(async () => {
     job.state = "running";
     try {
+      // fetch + index run in the worker thread (git fetch is blocking); the main thread only queues and reports
+      let fetchArgs: string[] | undefined;
       if (branch.startsWith("commit:")) {
         const sha = branch.slice(7);
-        try { git(repo, ["cat-file", "-e", `${sha}^{commit}`]); } catch { git(repo, ["fetch", "--no-tags", "--quiet", "origin", sha]); }
+        const have = (() => { try { execFileSync("git", ["-C", repo, "cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore" }); return true; } catch { return false; } })();
+        if (!have) fetchArgs = ["fetch", "--no-tags", "--quiet", "origin", sha];
       } else if (opts.fetch !== false && (opts.refresh || !isIndexed(db, branch))) {
-        git(repo, ["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+        fetchArgs = ["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`];
       }
-      job.report = await indexRef(db, repo, gitRefOf(branch), undefined, branch);
+      job.report = await indexInWorker(db, repo, gitRefOf(branch), branch, (p) => { job.progress = p; }, fetchArgs);
       job.state = "done";
       touchRef(db, branch);
       for (const d of enforceBudget(db, BUDGET_BYTES, new Set([branch]), BASE)) {
