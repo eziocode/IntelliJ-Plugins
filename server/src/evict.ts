@@ -55,3 +55,19 @@ export function enforceBudget(db: Db, budgetBytes: number, keep: Set<string>, ba
   }
   return dropped;
 }
+
+/**
+ * Idle policy: drop every non-base ref not used for `maxIdleMs` (default 48 h). Refs with no recorded use count as idle.
+ * Base (master) and `keep` are never dropped. Returns the dropped refs.
+ */
+export function sweepIdle(db: Db, maxIdleMs: number, keep: Set<string>, base = "master", now = Date.now()): string[] {
+  const names = (db.prepare("SELECT name FROM refs").all() as { name: string }[]).map((r) => r.name);
+  const dropped: string[] = [];
+  for (const n of names) {
+    if (n === base || keep.has(n)) continue;
+    if (now - lastUsed(db, n) < maxIdleMs) continue;
+    dropRef(db, n);
+    dropped.push(n);
+  }
+  return dropped;
+}

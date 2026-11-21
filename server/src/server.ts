@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { openDb, type Db } from "./db.js";
-import { BASE, ensureIndexed, ensureReady, evictionLog, isIndexed, isIndexing, jobStatus, listBranches, waitFor, BUDGET_BYTES } from "./branches.js";
+import { BASE, ensureIndexed, ensureReady, evictionLog, flushIdle, isIndexed, isIndexing, jobStatus, listBranches, waitFor, BUDGET_BYTES, IDLE_TTL_MS } from "./branches.js";
 import { touchRef, usedBytes } from "./evict.js";
 import { formatCards, searchSymbols } from "./search.js";
 import { getSymbol } from "./symbol.js";
@@ -135,7 +135,7 @@ function buildServer(session: Session): McpServer {
     }
     const js = jobStatus().filter((j) => j.state !== "done");
     out.push(js.length ? `jobs: ${js.map((j) => `${j.ref}=${j.state}${j.error ? `(${j.error})` : ""}`).join(", ")}` : "jobs: none");
-    out.push(`index budget: ${BUDGET_BYTES / 1048576} MiB; eviction log: ${evictionLog.slice(-5).join(" | ") || "none"}`);
+    out.push(`idle flush after ${IDLE_TTL_MS / 3600_000} h; index budget: ${BUDGET_BYTES / 1048576} MiB; eviction log: ${evictionLog.slice(-5).join(" | ") || "none"}`);
     out.push(`coverage sources: jacoco=${cov.jacocoBase ? "configured" : "not configured"} js=${cov.jsBase || cov.fixtureDir ? "configured" : "not configured"}`);
     return text(out.join("\n"));
   });
@@ -255,6 +255,10 @@ const http = createServer(async (req, res) => {
 http.listen(PORT, () => {
   console.error(`crm-index MCP on :${PORT}/mcp  repos=${[...repos.values()].map((r) => `${r.name}=${r.dir}`).join(",")}  data=${DATA}`);
   for (const r of repos.values()) if (!isIndexed(r.db, BASE)) { console.error(`${r.name}: master not indexed, starting initial index`); ensureIndexed(r.db, r.dir, BASE, { fetch: false }); }
+  // idle flush: every SWEEP_MIN minutes drop branches unused for IDLE_TTL_HOURS (default 48 h); master is always kept
+  const sweepMs = Number(process.env.SWEEP_MIN ?? 60) * 60_000;
+  setInterval(() => { for (const r of repos.values()) { const d = flushIdle(r.db, r.dir); if (d.length) console.error(`${r.name}: flushed idle ${d.join(", ")}`); } }, sweepMs).unref();
+  console.error(`idle flush: branches unused for ${IDLE_TTL_MS / 3600_000} h are dropped, sweep every ${sweepMs / 60_000} min`);
   // PRELOAD_REFS=refs... (comma-separated branch names) are indexed in the background at boot, e.g. the team's default branches
   const preload = (process.env.PRELOAD_REFS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
   for (const r of repos.values()) for (const b of preload) if (!isIndexed(r.db, b)) { console.error(`${r.name}: preloading ${b}`); ensureIndexed(r.db, r.dir, b); }

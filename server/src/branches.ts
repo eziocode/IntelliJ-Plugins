@@ -1,7 +1,7 @@
 import type { Db } from "./db.js";
 import { git } from "./git.js";
 import { gitRefOf } from "./diff.js";
-import { enforceBudget, touchRef } from "./evict.js";
+import { enforceBudget, sweepIdle, touchRef } from "./evict.js";
 import { pruneRemoteRef } from "./git.js";
 
 /** Index size budget (MiB of used SQLite pages). Least-recently-used branches are dropped beyond it. */
@@ -9,6 +9,19 @@ export const BUDGET_BYTES = Number(process.env.INDEX_BUDGET_MB ?? 500) * 1048576
 /** Also delete the mirror blobs of dropped branches (git gc). Off by default: gc is slow on a big mirror. */
 export const PRUNE_MIRROR = process.env.PRUNE_MIRROR === "1";
 export const evictionLog: string[] = [];
+/** Branches idle longer than this are flushed (default 48 h). Base branch is never flushed. */
+export const IDLE_TTL_MS = Number(process.env.IDLE_TTL_HOURS ?? 48) * 3600_000;
+
+/** Flush idle branches (and their mirror refs when PRUNE_MIRROR=1). Called on a timer by the server. */
+export function flushIdle(db: Db, repo: string, now = Date.now()): string[] {
+  const dropped = sweepIdle(db, IDLE_TTL_MS, new Set(), BASE, now);
+  for (const d of dropped) {
+    let note = `flushed idle ${d}`;
+    if (PRUNE_MIRROR && !d.startsWith("commit:")) { const r = pruneRemoteRef(repo, d); if (r.removed) note += ` (mirror pruned ${r.gcMs}ms)`; }
+    evictionLog.push(note);
+  }
+  return dropped;
+}
 import { indexRef, type IndexReport } from "./indexer.js";
 
 export const BASE = "master";
