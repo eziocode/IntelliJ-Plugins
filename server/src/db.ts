@@ -21,7 +21,7 @@ export function openDb(file: string): Db {
       DROP VIEW IF EXISTS v_manifest;
       DROP TABLE IF EXISTS symbols_fts; DROP TABLE IF EXISTS symbols; DROP TABLE IF EXISTS blobs;
       DROP TABLE IF EXISTS manifest; DROP TABLE IF EXISTS paths; DROP TABLE IF EXISTS refs; DROP TABLE IF EXISTS bodies;
-      DELETE FROM meta WHERE k LIKE 'indexed:%' OR k LIKE 'used:%' OR k='schema';`);
+      DELETE FROM meta WHERE k LIKE 'indexed:%' OR k LIKE 'used:%' OR k LIKE 'revision:%' OR k='schema';`);
     db.prepare("INSERT INTO meta(k,v) VALUES ('schema',?)").run(SCHEMA_VERSION);
   }
   db.exec(`

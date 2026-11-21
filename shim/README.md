@@ -44,7 +44,9 @@ the browser (for automation); do not commit it or paste it into chats.
 | `login` | Sign in (or re-sign in) with Zoho. Opens a browser. |
 | `index_status` | Indexed branches, symbol counts, running jobs, your active branch. |
 
-The active branch is kept in the shim process, per user session.
+The active branch is kept in the shim process, per client session. A cold switch can return while its branch builds. Poll `index_status` for the published commit before reading it. Another client can select a different branch while the first build is running.
+
+Direct HTTP MCP clients can pass the `workspace` returned by `switch_branch` to subsequent tools. Keep one handle per chat when using the same Zoho account in multiple chats. Shared credentials need an explicit branch or handle for branch-specific calls. Search, symbol, and diff responses identify the indexed revision.
 
 ## Behaviour notes
 

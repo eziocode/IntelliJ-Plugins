@@ -12,10 +12,11 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^13.2.0",
+    "fflate": "0.8.3",
     "tree-sitter-wasms": "^0.1.13",
+    "tsx": "^4.23.15",
     "web-tree-sitter": "^0.22.6",
-    "zod": "^4.6.7",
-    "tsx": "^4.23.15"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

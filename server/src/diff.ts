@@ -94,10 +94,12 @@ export interface DiffSymbolsResult {
 
 const CODE = /\.(java|js|mjs|cjs)$/;
 
-export function diffSymbols(db: Db, repo: string, base: string, head: string): DiffSymbolsResult {
-  const files = changedFiles(repo, base, head);
+export function diffSymbols(db: Db, repo: string, base: string, head: string, revisions?: { base: string; head: string }): DiffSymbolsResult {
+  const gitBase = revisions ? `commit:${revisions.base}` : base;
+  const gitHead = revisions ? `commit:${revisions.head}` : head;
+  const files = changedFiles(repo, gitBase, gitHead);
   const codePaths = files.filter((f) => CODE.test(f.path) || (f.oldPath && CODE.test(f.oldPath))).flatMap((f) => (f.oldPath && f.oldPath !== f.path ? [f.oldPath, f.path] : [f.path]));
-  const diffs = codePaths.length ? lineDiffs(repo, base, head, [...new Set(codePaths)]) : [];
+  const diffs = codePaths.length ? lineDiffs(repo, gitBase, gitHead, [...new Set(codePaths)]) : [];
   const symbols: ChangedSymbol[] = [];
   const changedLinesByPath = new Map<string, number[]>();
 

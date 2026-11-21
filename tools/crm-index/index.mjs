@@ -36744,7 +36744,19 @@ function startLogin(loginPath = "/auth/login") {
   });
   return loginInFlight;
 }
-var activeBranch = "master";
+var contexts = /* @__PURE__ */ new Map();
+var pendingSwitches = /* @__PURE__ */ new Map();
+var latestSwitch = 0;
+var selectedRepo = REPO;
+function scope(repo, branch, workspace) {
+  const chosenRepo = repo ?? selectedRepo;
+  const pinned = contexts.get(chosenRepo);
+  if (workspace) return { repo, branch, workspace };
+  if (branch !== void 0) return { repo: chosenRepo, branch };
+  return { repo: chosenRepo, workspace: pinned?.workspace, branch: pinned?.workspace ? void 0 : pinned?.branch };
+}
+var scopeSchema = { repo: external_exports.string().optional(), branch: external_exports.string().optional(), workspace: external_exports.string().optional() };
+var location = (d) => `repo=${d.repo ?? "default"} branch=${d.branch} revision=${d.revision ?? "unknown"}${d.version && !d.revision ? ` index_version=${d.version}` : ""}`;
 var text = (t, isError = false) => ({ content: [{ type: "text", text: t }], isError });
 async function rawApi(method, path, body, { timeoutMs = 6e4, retries = 2 } = {}) {
   for (let attempt = 0; ; attempt++) {
@@ -36796,36 +36808,41 @@ var errText = (r) => {
   return `crm-index error ${r.status}: ${r.data.error ?? "unknown"}${r.data.hint ? ` (${r.data.hint})` : ""}`;
 };
 var srv = new McpServer({ name: "crm-index", version: "0.1.0" });
-srv.registerTool("get_code_context", {
-  description: "Search the CRM codebase (Java + JS) by natural language or identifiers. Returns ranked symbol CARDS (id, signature, path:lines), not bodies. Pick ids, then call get_symbol(id). Uses the active branch unless `branch` is given.",
-  inputSchema: {
-    query: external_exports.string().describe("Keywords or identifiers, e.g. 'validate api name custom field'"),
-    limit: external_exports.number().int().min(1).max(30).optional().describe("Max cards (default 8)"),
-    path: external_exports.string().optional().describe("Only paths containing this substring"),
-    branch: external_exports.string().optional()
+async function scopedApi(path, args, opts) {
+  const result = await api("POST", path, args, opts);
+  if (result.status === 400 && !args.branch && !args.workspace && result.data.error === "branch or workspace required for a shared credential") {
+    return api("POST", path, { ...args, branch: "master" }, opts);
   }
-}, async ({ query, limit, path, branch }) => {
-  const b = branch ?? activeBranch;
-  const r = await api("POST", "/api/search", { query, limit, path, branch: b, repo: REPO });
-  if (r.status === 409) return text(`Branch "${b}" is not indexed yet. Call switch_branch("${b}") first.`, true);
+  return result;
+}
+var pendingResult = (r) => text(`${location(r.data)} index=${r.data.state ?? r.data.status}. Check index_status and retry.`);
+srv.registerTool("get_code_context", {
+  description: "Search code on the selected branch. Returns ranked symbol cards with source locations.",
+  inputSchema: { ...scopeSchema, query: external_exports.string(), limit: external_exports.number().int().min(1).max(30).optional(), path: external_exports.string().optional() }
+}, async ({ repo, branch, workspace, ...args }) => {
+  const r = await scopedApi("/api/search", { ...scope(repo, branch, workspace), ...args });
+  if (r.status === 202 || r.data.status === "indexing") return pendingResult(r);
   if (!r.data.ok) return text(errText(r), true);
-  if (!r.data.cards.length) return text(`No symbols matched on ${b}. Try fewer or different keywords.`);
-  return text(`branch=${b} match=${r.data.mode} results=${r.data.cards.length}${r.data.indexing ? "\nWARNING: branch still indexing; results may be incomplete." : ""}
-${r.data.text}`);
+  return text(`${location(r.data)} match=${r.data.mode} results=${r.data.cards.length}
+${r.data.text || "No symbols matched. Try fewer or different keywords."}`);
 });
 srv.registerTool("get_symbol", {
-  description: "Full source of one symbol by id from get_code_context, with line numbers. Classes return a member outline.",
-  inputSchema: { id: external_exports.string(), max_lines: external_exports.number().int().min(10).max(2e3).optional(), branch: external_exports.string().optional() }
-}, async ({ id, max_lines, branch }) => {
-  const r = await api("POST", "/api/symbol", { id, max_lines, branch: branch ?? activeBranch, repo: REPO });
+  description: "Read a symbol body or a class outline from the selected branch.",
+  inputSchema: { ...scopeSchema, id: external_exports.string(), max_lines: external_exports.number().int().min(10).max(2e3).optional() }
+}, async ({ repo, branch, workspace, ...args }) => {
+  const r = await scopedApi("/api/symbol", { ...scope(repo, branch, workspace), ...args });
+  if (r.status === 202 || r.data.status === "indexing") return pendingResult(r);
   if (!r.data.ok) return text(r.data.text ?? errText(r), true);
-  return text(r.data.text);
+  return text(`${location(r.data)}
+${r.data.text}`);
 });
 srv.registerTool("list_branches", {
-  description: "List repository branches (newest first), filtered by substring. The repo has ~18k branches, so always filter. * = indexed.",
-  inputSchema: { contains: external_exports.string().optional(), limit: external_exports.number().int().min(1).max(100).optional() }
-}, async ({ contains, limit }) => {
-  const qs = new URLSearchParams({ contains: contains ?? "", limit: String(limit ?? 25), ...REPO ? { repo: REPO } : {} });
+  description: "List repository branches newest first. Filter by substring.",
+  inputSchema: { repo: external_exports.string().optional(), workspace: external_exports.string().optional(), contains: external_exports.string().optional(), limit: external_exports.number().int().min(1).max(100).optional() }
+}, async ({ repo, workspace, contains, limit }) => {
+  const opts = scope(repo, void 0, workspace);
+  const qs = new URLSearchParams({ contains: contains ?? "", limit: String(limit ?? 25) });
+  for (const [key, value] of Object.entries(opts)) if (value !== void 0) qs.set(key, value);
   const r = await api("GET", `/api/branches?${qs}`);
   if (!r.data.ok) return text(errText(r), true);
   const lines = r.data.branches.map((x) => `${x.indexed ? "*" : " "} ${x.name}${x.date ? `  (${x.date})` : ""}`);
@@ -36833,40 +36850,51 @@ srv.registerTool("list_branches", {
 ${lines.join("\n")}`);
 });
 srv.registerTool("switch_branch", {
-  description: "Make a branch active for this session, indexing it on the server if needed (only changed files are parsed). First use of a branch may take a while.",
-  inputSchema: { branch: external_exports.string() }
-}, async ({ branch }) => {
-  const deadline = Date.now() + 45e3;
-  for (; ; ) {
-    const r = await api("POST", "/api/switch", { branch, repo: REPO }, { timeoutMs: 4e4 });
-    if (r.status === 200 && r.data.ok) {
-      activeBranch = branch;
-      return text(`active branch = ${branch} (${r.data.status})`);
-    }
-    if (r.status === 202) {
-      if (Date.now() > deadline) {
-        activeBranch = branch;
-        return text(`"${branch}" is still indexing; it is now active. Searches may be incomplete for a few minutes.`);
-      }
-      await new Promise((res) => setTimeout(res, 5e3));
-      continue;
-    }
-    return text(errText(r), true);
+  description: "Select a branch for this workspace. Returns immediately when a distributed build is queued.",
+  inputSchema: { repo: external_exports.string().optional(), branch: external_exports.string() }
+}, async ({ repo, branch }) => {
+  const id = ++latestSwitch;
+  const target = repo ?? selectedRepo;
+  pendingSwitches.set(target, id);
+  const r = await api("POST", "/api/switch", { repo: target, branch }, { timeoutMs: 4e4, retries: 0 });
+  if (!r.data.ok) return text(errText(r), true);
+  const actualRepo = r.data.repo ?? target;
+  if (pendingSwitches.get(target) === id && (pendingSwitches.get(actualRepo) ?? 0) <= id) {
+    contexts.set(actualRepo, { workspace: r.data.workspace, branch });
+    pendingSwitches.set(actualRepo, id);
   }
+  if (id === latestSwitch) selectedRepo = actualRepo;
+  return text(`${location({ ...r.data, branch })} status=${r.data.status}${r.data.workspace ? `
+workspace=${r.data.workspace}` : ""}`);
+});
+srv.registerTool("reindex", {
+  description: "Refresh the selected branch to its latest commit.",
+  inputSchema: scopeSchema
+}, async ({ repo, branch, workspace }) => {
+  const r = await scopedApi("/api/reindex", scope(repo, branch, workspace));
+  if (r.status === 202 || r.data.status === "indexing") return pendingResult(r);
+  return r.data.ok ? text(`${location(r.data)} indexed`) : text(errText(r), true);
 });
 srv.registerTool("diff_symbols", {
-  description: "Changed methods/functions/classes between two branches (merge-base diff): added / modified / removed / class_level.",
-  inputSchema: { head: external_exports.string().optional().describe("Head branch (default: active branch)"), base: external_exports.string().optional().describe("Base branch (default master)") }
-}, async ({ head, base }) => {
-  const r = await api("POST", "/api/diff", { base: base ?? "master", head: head ?? activeBranch, repo: REPO }, { timeoutMs: 12e4 });
+  description: "Changed methods, functions and classes between indexed base and head.",
+  inputSchema: { ...scopeSchema, head: external_exports.string().optional(), base: external_exports.string().optional() }
+}, async ({ repo, branch, workspace, head, base }) => {
+  const opts = scope(repo, head ?? branch, workspace);
+  const r = await scopedApi("/api/diff", { ...opts, head: opts.branch, base }, { timeoutMs: 12e4 });
+  if (r.status === 202 || r.data.status === "indexing") return pendingResult(r);
   if (!r.data.ok) return text(errText(r), true);
-  return text(r.data.text);
+  return text(`repo=${r.data.repo} base=${r.data.base}@${r.data.baseRevision} head=${r.data.head}@${r.data.headRevision}
+${r.data.text}`);
 });
 srv.registerTool("login", {
   description: "Sign in to crm-index with your Zoho account (opens a browser). Use when tools say you are not signed in, or to switch accounts.",
   inputSchema: {}
 }, async () => {
   clearSession();
+  contexts.clear();
+  pendingSwitches.clear();
+  ++latestSwitch;
+  selectedRepo = REPO;
   const login = startLogin(await discoverLoginPath());
   const done = await Promise.race([login.then(() => true, () => false), new Promise((res) => setTimeout(() => res(false), 5e4))]);
   if (!done) return text(`Finish signing in in the browser${lastLoginUrl ? ` (${lastLoginUrl})` : ""}, then run any crm-index tool.`);
@@ -36874,12 +36902,14 @@ srv.registerTool("login", {
 });
 srv.registerTool("index_status", {
   description: "Index health: indexed branches, symbol counts, running jobs, and this session's active branch.",
-  inputSchema: {}
-}, async () => {
-  const r = await api("GET", "/api/status");
+  inputSchema: scopeSchema
+}, async ({ repo, branch, workspace }) => {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(scope(repo, branch, workspace))) if (value !== void 0) qs.set(key, value);
+  const r = await api("GET", `/api/status?${qs}`);
   if (!r.data.ok) return text(errText(r), true);
   const who = await rawApi("GET", "/api/whoami");
-  const lines = [`signed in as: ${who.data?.user ?? "?"}`, `active branch (this session): ${activeBranch}`];
+  const lines = [`signed in as: ${who.data?.user ?? "?"}`, r.data.active ? location(r.data.active) : `active branch: ${branch ?? contexts.get(repo ?? selectedRepo)?.branch ?? "master"}`];
   for (const x of r.data.repos) lines.push(`[${x.repo}] symbols=${x.symbols} refs: ${x.refs.map((f) => `${f.ref}(${f.files})`).join(", ") || "none"}`);
   if (r.data.jobs?.length) lines.push(`jobs: ${r.data.jobs.map((j) => `${j.ref}=${j.state}${j.error ? `(${j.error.slice(0, 80)})` : ""}`).join(", ")}`);
   return text(lines.join("\n"));

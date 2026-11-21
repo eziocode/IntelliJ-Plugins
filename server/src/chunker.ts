@@ -20,7 +20,17 @@ export type Lang = "java" | "js";
 const langs: Partial<Record<Lang, Language>> = {};
 let parser: Parser | undefined;
 
-export async function initChunker(): Promise<void> {
+let initializing: Promise<void> | undefined;
+
+export function initChunker(): Promise<void> {
+  initializing ??= loadChunker().catch(error => {
+    initializing = undefined;
+    throw error;
+  });
+  return initializing;
+}
+
+async function loadChunker(): Promise<void> {
   await Parser.init();
   parser = new Parser();
   for (const [lang, wasm] of [["java", "tree-sitter-java.wasm"], ["js", "tree-sitter-javascript.wasm"]] as const) {
@@ -28,7 +38,7 @@ export async function initChunker(): Promise<void> {
   }
 }
 
-const MAX_BYTES = 10_000_000;
+export const MAX_BYTES = 10_000_000;
 const MAX_AVG_LINE = 400; // minified detector
 
 export function langOf(path: string): Lang | null {

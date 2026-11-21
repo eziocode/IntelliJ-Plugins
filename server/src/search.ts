@@ -6,14 +6,15 @@ export interface Card {
   id: string; kind: string; symbol: string; path: string; lines: string; sig: string; doc: string; score: number;
 }
 
-export const makeId = (rowid: number, blob: string) => `${rowid.toString(36)}.${blob.slice(0, 5)}`;
+// Row IDs differ across independently restored SQLite replicas. Blob-local order is stable in the parser and artifact format.
+export const makeId = (ordinal: number, blob: string) => `b1.${blob}.${ordinal.toString(36)}`;
 export function parseId(id: string): { rowid: number; blob5: string } | null {
   const m = /^([0-9a-z]+)\.([0-9a-f]{5})$/.exec(id);
   return m ? { rowid: parseInt(m[1], 36), blob5: m[2] } : null;
 }
 
 const SQL = `
-  SELECT s.id, m.blob AS blob, s.kind, s.parent, s.name, s.sl, s.el, s.sig, s.doc, m.path,
+  SELECT s.id, s.blob_id, m.blob AS blob, s.kind, s.parent, s.name, s.sl, s.el, s.sig, s.doc, m.path,
          bm25(symbols_fts, 10.0, 3.0, 3.0, 1.0) AS score
   FROM symbols_fts f
   JOIN symbols s ON s.id = f.rowid
@@ -21,7 +22,7 @@ const SQL = `
   WHERE symbols_fts MATCH ?
   ORDER BY score LIMIT ?`;
 
-interface Row { id: number; blob: string; kind: string; parent: string; name: string; sl: number; el: number; sig: string; doc: string; path: string; score: number }
+interface Row { id: number; blob_id: number; blob: string; kind: string; parent: string; name: string; sl: number; el: number; sig: string; doc: string; path: string; score: number }
 
 function run(db: Db, ref: string, match: string, limit: number): Row[] {
   return (db.prepare(SQL).all(ref, match, limit) as Row[]).map((r) => ({ ...r, sig: unpackText(r.sig), doc: unpackText(r.doc) }));
@@ -56,8 +57,9 @@ export function searchSymbols(db: Db, ref: string, q: string, limit = 8, pathFil
   // one card per (path,symbol): same blob may appear at several paths
   const uniq = new Map<string, Row>();
   for (const r of rows) { const k = `${r.path}#${r.id}`; if (!uniq.has(k)) uniq.set(k, r); }
+  const position = db.prepare("SELECT COUNT(*) AS n FROM symbols WHERE blob_id=? AND id<?");
   const cards = [...uniq.values()].slice(0, limit).map((r): Card => ({
-    id: makeId(r.id, r.blob), kind: r.kind, symbol: r.parent ? `${r.parent}.${r.name}` : r.name,
+    id: makeId((position.get(r.blob_id, r.id) as { n: number }).n, r.blob), kind: r.kind, symbol: r.parent ? `${r.parent}.${r.name}` : r.name,
     path: r.path.replace(/^webapps\/zohocrm\//, "~/"), lines: `${r.sl}-${r.el}`,
     sig: r.sig.length > 110 ? r.sig.slice(0, 107) + "..." : r.sig, doc: r.doc.length > 90 ? r.doc.slice(0, 87) + "..." : r.doc, score: r.score,
   }));

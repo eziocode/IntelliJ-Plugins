@@ -1,25 +1,27 @@
 import { createServer, type IncomingMessage } from "node:http";
+import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { recoverStagedArtifacts } from "./indexer.js";
 import { openDb, type Db } from "./db.js";
-import { BASE, ensureIndexed, ensureReady, evictionLog, flushIdle, isIndexed, isIndexing, jobStatus, listBranches, waitFor, BUDGET_BYTES, IDLE_TTL_MS } from "./branches.js";
-import { persistTouches, touchRef, usedBytes } from "./evict.js";
+import { BASE, reconcileBranch, ensureIndexed, revision, evictionLog, flushIdle, isIndexing, jobStatus, listBranches, waitFor, BUDGET_BYTES, IDLE_TTL_MS } from "./branches.js";
+import { persistTouches, touchRef } from "./evict.js";
 import { formatCards, searchSymbols } from "./search.js";
 import { getSymbol } from "./symbol.js";
 import { diffSymbols } from "./diff.js";
-import { changeSummary, formatDiffSymbols, formatSummary } from "./summary.js";
-import { coverageGap, formatGap, type GapKind } from "./gap.js";
-import { covConfigFromEnv, ingestJsReport } from "./coverage.js";
+import { formatDiffSymbols } from "./summary.js";
+import { covConfigFromEnv } from "./coverage.js";
 import { handleAuth, keysEnabled, loginEnabled, loginTarget, verifyKey, verifySession } from "./auth.js";
 import { handleOAuth, resourceMetadataUrl } from "./oauth.js";
 import { capacity } from "./branches.js";
 import { snapshotInWorker } from "./indexPool.js";
 import { snapshotEnabled } from "./snapshot.js";
-import { compareDescription, formatDescriptionCheck, formatImpact, impactTests } from "./impact.js";
+import { Workspaces, RequestError, localDefaults, localSigningKey, validateBranch, type Caller, type WorkspaceArgs } from "./workspace.js";
+import { brokerCall, poolEnabled, ensureGitRevision } from "./buildBroker.js";
 
 const DATA = process.env.DATA_DIR ?? "data";
 const PORT = Number(process.env.X_ZOHO_CATALYST_LISTEN_PORT ?? process.env.PORT ?? 8787);
@@ -37,7 +39,9 @@ const repos = new Map<string, Repo>();
     const name = part.slice(0, i), dir = part.slice(i + 1);
     if (!/^[\w.-]+$/.test(name) || !dir) { console.error(`bad REPOS entry: ${part}`); process.exit(1); }
     const file = `${DATA}/${name}.sqlite`;
-    repos.set(name, { name, dir, db: openDb(file), file });
+    const db = openDb(file);
+    recoverStagedArtifacts(db);
+    repos.set(name, { name, dir, db, file });
   }
   if (!repos.size) { console.error("REPOS (name=path[,name=path]) or REPO_DIR is required"); process.exit(1); }
 }
@@ -48,10 +52,10 @@ const isKeyRevoked = (kid: string): boolean => !!repos.get(defaultRepo)!.db.prep
 const identify = (bearer: string): { user: string } | { error: string } | null => {
   if (TOKEN && bearer === TOKEN) return { user: "admin" };
   const k = bearer ? verifyKey(bearer, isKeyRevoked) : null;
-  if (k?.claims) return { user: k.claims.email };
+  if (k?.claims) return { user: k.claims.email.toLowerCase() };
   if (k?.reason) return { error: k.reason };
   const v = bearer ? verifySession(bearer) : null;
-  if (v?.session) return { user: v.session.email };
+  if (v?.session) return { user: v.session.email.toLowerCase() };
   if (v?.expired) return { error: "session_expired" };
   return null;
 };
@@ -59,133 +63,210 @@ const authRequired = () => !!TOKEN || keysEnabled() || loginEnabled();
 const cov = covConfigFromEnv();
 
 const text = (t: string, isError = false) => ({ content: [{ type: "text" as const, text: t }], isError });
-const SAFE_ID = /^[\w.-]+$/;
-const SHA = /^[0-9a-f]{7,40}$/i;
+const contextDb = repos.get(defaultRepo)!.db;
+const sharedKey = process.env.WORKSPACE_SECRET || process.env.SESSION_SECRET || process.env.KEY_SECRET || process.env.SNAPSHOT_KEY || TOKEN;
+if (poolEnabled() && !sharedKey) throw new Error("distributed workspace handles need a shared signing secret");
+const workspaces = new Workspaces(poolEnabled() ? {
+  async get(user, repo) {
+    const saved = await brokerCall<{ repo: string | null; branch: string | null }>("getContext", { user, repo });
+    return saved.repo && saved.branch ? { repo: saved.repo, branch: saved.branch } : null;
+  },
+  async put(user, { repo, branch }) { await brokerCall("putContext", { user, repo, branch }); },
+} : localDefaults(contextDb), sharedKey || localSigningKey(contextDb), defaultRepo);
 
-interface Session { repo: string; branches: Record<string, string> }
+type Input = WorkspaceArgs & { query?: string; path?: string; limit?: number; id?: string; max_lines?: number; head?: string; base?: string; contains?: string };
+const reply = <T extends object>(status: number, data: T, message: string) => ({
+  status, data: { ok: status < 400, ...data }, message,
+});
+function legacyVersion(r: Repo, branch: string): string | null {
+  if (poolEnabled() || isIndexing(r.dir, branch)) return null;
+  return (r.db.prepare("SELECT v FROM meta WHERE k=?").get("indexed:" + branch) as { v: string } | undefined)?.v ?? null;
+}
+const available = (r: Repo, branch: string) => revision(r.db, branch) ?? legacyVersion(r, branch);
+const location = (r: Repo, branch: string, sha: string | null, version?: string | null) =>
+  `repo=${r.name} branch=${branch} revision=${sha ?? (version ? "unknown" : "pending")}${version && !sha ? ` index_version=${version}` : ""}`;
+function repoByName(name: string) {
+  const r = repos.get(name);
+  if (!r) throw new RequestError(404, `unknown repo "${name}". Available: ${[...repos.keys()].join(", ")}`);
+  return r;
+}
+function waiting(r: Repo, branch: string, job: ReturnType<typeof ensureIndexed>, workspace?: string) {
+  const state = job.state;
+  const data = { repo: r.name, branch, revision: revision(r.db, branch), workspace, state, status: "indexing", progress: job.progress ?? null };
+  if (state === "error") throw new RequestError(503, `Could not index "${branch}": ${job.error}`);
+  return reply(202, data, `${location(r, branch, data.revision)} index=${state}; check index_status and retry.${workspace ? `\nworkspace=${workspace}` : ""}`);
+}
+async function select(caller: Caller, args: WorkspaceArgs): Promise<{ r: Repo; branch: string }> {
+  const ctx = await workspaces.select(caller, args);
+  return { r: repoByName(ctx.repo), branch: ctx.branch! };
+}
 
-function buildServer(session: Session): McpServer {
-  const srv = new McpServer({ name: "crm-index", version: "0.2.0" });
+async function switchBranch(caller: Caller, args: Input, refresh: boolean) {
+  if (!refresh) validateBranch(args.branch);
+  const { r, branch } = await select(caller, args);
+  const workspace = refresh ? args.workspace : await workspaces.activate(caller, { repo: r.name, branch });
+  const restoring = refresh ? undefined : await reconcileBranch(r.db,r.dir,branch);
+  if (restoring) return waiting(r,branch,restoring,workspace);
+  let sha = revision(r.db, branch);
+  const version = sha ?? legacyVersion(r, branch);
+  if (refresh || !version || isIndexing(r.dir, branch)) {
+    const job = ensureIndexed(r.db, r.dir, branch, { refresh });
+    if (poolEnabled() || !await waitFor(job, WAIT_MS)) return waiting(r, branch, job, workspace);
+    if (job.state === "error") throw new RequestError(503, `Could not index "${branch}": ${job.error}`);
+    sha = revision(r.db, branch);
+    if (!sha) throw new RequestError(409, "indexed revision unavailable; retry switch_branch");
+    return reply(200, { repo: r.name, status: "indexed", branch, revision: sha, workspace, report: job.report },
+      `${location(r, branch, sha)} indexed${workspace ? `\nworkspace=${workspace}` : ""}`);
+  }
+  touchRef(r.db, branch);
+  return reply(200, { repo: r.name, status: "indexed", branch, revision: sha, version, workspace },
+    `${location(r, branch, sha, version)} indexed${workspace ? `\nworkspace=${workspace}` : ""}`);
+}
 
-  const pick = (name?: string): Repo | string => {
-    const r = repos.get(name ?? session.repo);
-    return r ?? `unknown repo "${name}". Available: ${[...repos.keys()].join(", ")}`;
-  };
-  const active = (r: Repo, b?: string) => b ?? session.branches[r.name] ?? BASE;
-  const repoArg = z.string().optional().describe(`Repository (default "${defaultRepo}"; available: ${[...repos.keys()].join(", ")})`);
-  const guard = (fn: () => Promise<ReturnType<typeof text>>) => fn().catch((e: Error) => text(`error: ${e.message.split("\n")[0]}`, true));
-
-  srv.registerTool("get_code_context", {
-    description: "Search the CRM codebase (Java + JS) by natural language or identifiers. Returns ranked symbol CARDS (id, signature, path:lines), not code bodies. Pick the relevant ids, then call get_symbol(id) for the body. Searches the session's active branch unless `branch` is given.",
-    inputSchema: {
-      query: z.string().describe("Keywords or identifiers, e.g. 'validate api name custom field'"),
-      limit: z.number().int().min(1).max(30).optional().describe("Max cards (default 8)"),
-      path: z.string().optional().describe("Only paths containing this substring, e.g. 'CRMClient/mixins'"),
-      branch: z.string().optional(), repo: repoArg,
-    },
-  }, async ({ query, limit, path, branch, repo }) => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const b = active(r, branch);
-    if (!isIndexed(r.db, b)) return text(`Branch "${b}" is not indexed yet in ${r.name}. Call switch_branch("${b}") first.`, true);
-    touchRef(r.db, b);
-    const { cards, mode } = searchSymbols(r.db, b, query, limit ?? 8, path);
-    if (!cards.length) return text(`No symbols matched on ${r.name}:${b}. Try fewer or different keywords.`);
-    return text(`repo=${r.name} branch=${b} match=${mode} results=${cards.length}${isIndexing(r.dir, b) ? "\nWARNING: this branch is still being indexed; results may be incomplete. Check index_status." : ""}\n${formatCards(cards)}`);
-  });
-
-  srv.registerTool("get_symbol", {
-    description: "Full source of one symbol by id from get_code_context (with line numbers). For a class/interface/enum it returns a member outline instead; search a member for its body.",
-    inputSchema: { id: z.string(), max_lines: z.number().int().min(10).max(2000).optional(), branch: z.string().optional(), repo: repoArg },
-  }, async ({ id, max_lines, branch, repo }) => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const x = getSymbol(r.db, r.dir, id, active(r, branch), max_lines ?? 150);
-    return text(x.text, !x.ok);
-  });
-
-  srv.registerTool("list_branches", {
-    description: "List repository branches (newest first), optionally filtered by substring. The repo has ~18k branches, so always filter. Shows which are already indexed.",
-    inputSchema: { contains: z.string().optional(), limit: z.number().int().min(1).max(100).optional(), repo: repoArg },
-  }, async ({ contains, limit, repo }) => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const x = listBranches(r.db, r.dir, contains ?? "", limit ?? 25);
-    const lines = x.branches.map((b) => `${b.indexed ? "*" : " "} ${b.name}${b.date ? `  (${b.date})` : ""}`);
-    return text(`${x.matched}/${x.total} branches match${x.matched > x.branches.length ? `, showing ${x.branches.length}` : ""}  (* = indexed)\n${lines.join("\n")}`);
-  });
-
-  srv.registerTool("switch_branch", {
-    description: "Make a branch the active one for this session (per repo), fetching and indexing it if needed. Only changed files are parsed; unchanged blobs are shared with master. May take a few seconds on first use.",
-    inputSchema: { branch: z.string(), repo: repoArg },
-  }, async ({ branch, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    if (isIndexed(r.db, branch) && !isIndexing(r.dir, branch)) { session.branches[r.name] = branch; session.repo = r.name; return text(`active ${r.name} branch = ${branch} (already indexed)`); }
-    const job = ensureIndexed(r.db, r.dir, branch);
-    const done = await waitFor(job, WAIT_MS);
-    if (done && job.state === "error") return text(`Could not index "${branch}": ${job.error}`, true);
-    session.branches[r.name] = branch; session.repo = r.name;
-    if (!done) return text(`Indexing "${branch}" is still running (${Math.round((Date.now() - job.startedAt) / 1000)}s so far). It is now your active branch; call index_status, then retry searches.`);
-    const x = job.report!;
-    return text(`active ${r.name} branch = ${branch}. indexed in ${(x.ms / 1000).toFixed(1)}s: ${x.files} files, ${x.newBlobs} new blobs parsed, ${x.reusedBlobs} reused, +${x.symbols} symbols.`);
-  }));
-
-  srv.registerTool("reindex", {
-    description: "Fetch the latest commits for a branch (default: the active one) and update its index. Use after someone pushes.",
-    inputSchema: { branch: z.string().optional(), repo: repoArg },
-  }, async ({ branch, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const b = active(r, branch);
-    const job = ensureIndexed(r.db, r.dir, b, { refresh: true });
-    const done = await waitFor(job, WAIT_MS);
-    if (!done) return text(`Reindex of "${b}" is running; check index_status.`);
-    if (job.state === "error") return text(`Reindex failed: ${job.error}`, true);
-    const x = job.report!;
-    return text(`${r.name}:${b} up to date: ${x.newBlobs} new blobs parsed, ${x.reusedBlobs} reused, +${x.symbols} symbols, ${(x.ms / 1000).toFixed(1)}s.`);
-  }));
-
-  srv.registerTool("index_status", {
-    description: "Index health per repo: which branches are indexed, symbol counts, running jobs, and this session's active branches.",
-    inputSchema: {},
-  }, async () => {
-    const out: string[] = [`session repo: ${session.repo}`];
-    for (const r of repos.values()) {
-      const refs = r.db.prepare("SELECT ref, COUNT(*) files FROM v_manifest WHERE ref NOT LIKE 'commit:%' GROUP BY ref ORDER BY ref").all() as { ref: string; files: number }[];
-      const n = (r.db.prepare("SELECT COUNT(*) c FROM symbols").get() as { c: number }).c;
-      out.push(`[${r.name}] active branch: ${session.branches[r.name] ?? BASE}  symbols: ${n}  db: ${(statSync(r.file).size / 1048576).toFixed(0)} MiB`);
-      for (const x of refs.slice(0, 30)) out.push(`  ${x.ref}  ${x.files} files`);
+async function readBranch(caller: Caller, args: Input, symbol: boolean) {
+  const { r, branch } = await select(caller, args);
+  const restoring = await reconcileBranch(r.db, r.dir, branch);
+  if (restoring) return waiting(r, branch, restoring);
+  // Read manifest, symbols and revision at the same committed SQLite snapshot.
+  const result = r.db.transaction(() => {
+    const sha = revision(r.db, branch);
+    const version = sha ?? legacyVersion(r, branch);
+    if (!version) return null;
+    touchRef(r.db, branch);
+    const meta = { repo: r.name, branch, revision: sha, version };
+    if (symbol) {
+      const x = getSymbol(r.db, r.dir, args.id ?? "", branch, Number(args.max_lines ?? 150));
+      return reply(x.ok ? 200 : 404, { ...meta, text: x.text }, `${location(r, branch, sha, version)}\n${x.text}`);
     }
-    const js = jobStatus().filter((j) => j.state !== "done");
-    out.push(js.length ? `jobs: ${js.map((j) => `${j.ref}=${j.state}${j.error ? `(${j.error})` : ""}`).join(", ")}` : "jobs: none");
-    out.push(`idle flush after ${IDLE_TTL_MS / 3600_000} h; index budget: ${BUDGET_BYTES / 1048576} MiB; eviction log: ${evictionLog.slice(-5).join(" | ") || "none"}`);
-    out.push(`coverage sources: jacoco=${cov.jacocoBase ? "configured" : "not configured"} js=${cov.jsBase || cov.fixtureDir ? "configured" : "not configured"}`);
-    return text(out.join("\n"));
+    const { cards, mode } = searchSymbols(r.db, branch, args.query ?? "", Number(args.limit ?? 8), args.path);
+    const body = formatCards(cards);
+    return reply(200, { ...meta, cards, mode, text: body, indexing: isIndexing(r.dir, branch) },
+      `${location(r, branch, sha, version)} match=${mode} results=${cards.length}\n${body || "No symbols matched. Try fewer or different keywords."}`);
+  })();
+  if (result) return result;
+  if (poolEnabled()) return waiting(r, branch, ensureIndexed(r.db, r.dir, branch));
+  throw new RequestError(409, `branch "${branch}" has no published revision. Call switch_branch("${branch}") first.`);
+}
+
+async function readDiff(caller: Caller, args: Input) {
+  const { r, branch: head } = await select(caller, { ...args, branch: args.head ?? args.branch });
+  const base = validateBranch(args.base ?? BASE);
+  for (const branch of new Set([base, head])) {
+    const restoring = await reconcileBranch(r.db, r.dir, branch);
+    if (restoring) return waiting(r, branch, restoring);
+    if (revision(r.db, branch)) continue;
+    const job = ensureIndexed(r.db, r.dir, branch);
+    if (poolEnabled() || !await waitFor(job, WAIT_MS)) return waiting(r, branch, job);
+    if (job.state === "error") throw new RequestError(503, `Could not index "${branch}": ${job.error}`);
+  }
+  const refs = { base: revision(r.db, base), head: revision(r.db, head) };
+  if (!refs.base || !refs.head) throw new RequestError(409, "diff revisions unavailable; retry");
+  const revisions = { base: refs.base, head: refs.head };
+  let d: ReturnType<typeof diffSymbols>;
+  if (poolEnabled()) {
+    await Promise.all([...new Set([revisions.base, revisions.head])].map(sha=>ensureGitRevision(r.dir,sha)));
+    d = await new Promise<ReturnType<typeof diffSymbols>>((resolve,reject) => {
+      const worker = new Worker(new URL("./diffWorker.ts", import.meta.url), {
+        workerData: {dbFile:r.file,dir:r.dir,base,head,revisions}, execArgv:["--import","tsx"]
+      });
+      worker.once("message",msg=>msg.changed ? reject(new RequestError(409,"index revisions changed; retry diff")) : resolve(msg.diff));
+      worker.once("error",reject);
+      worker.once("exit",code=>reject(new Error("diff worker exited with code " + code)));
+    });
+  } else {
+    d = r.db.transaction(() => {
+      if (revision(r.db,base) !== revisions.base || revision(r.db,head) !== revisions.head)
+        throw new RequestError(409,"index revisions changed; retry diff");
+      return diffSymbols(r.db,r.dir,base,head,revisions);
+    })();
+  }
+  touchRef(r.db, base);
+  touchRef(r.db, head);
+  const body = formatDiffSymbols(d, Number(args.limit ?? 200));
+  return reply(200, { repo: r.name, base, head, branch: head, revision: revisions.head, baseRevision: revisions.base, headRevision: revisions.head,
+    symbols: d.symbols, files: d.files.map(f => f.path), text: body },
+    `repo=${r.name} base=${base}@${revisions.base} head=${head}@${revisions.head}\n${body}`);
+}
+
+async function branches(caller: Caller, args: Input) {
+  const ctx = await workspaces.select(caller, args, false);
+  const r = repoByName(ctx.repo);
+  const x = listBranches(r.db, r.dir, args.contains ?? "", Number(args.limit ?? 25));
+  const lines = x.branches.map(b => `${b.indexed ? "*" : " "} ${b.name}${b.date ? `  (${b.date})` : ""}`);
+  return reply(200, { repo: r.name, ...x }, `${x.matched}/${x.total} branches match (* = indexed)\n${lines.join("\n")}`);
+}
+
+async function status(caller: Caller, args: Input) {
+  const ctx = await workspaces.select(caller, args, false);
+  const r = repoByName(ctx.repo);
+  const active = { repo: ctx.repo, branch: ctx.branch ?? null, revision: ctx.branch ? revision(r.db, ctx.branch) : null, version: ctx.branch ? available(r, ctx.branch) : null };
+  const details = [...repos.values()].map(repo => {
+    const refs = repo.db.prepare("SELECT ref, COUNT(*) files FROM v_manifest WHERE ref NOT LIKE 'commit:%' AND ref NOT GLOB ':stage:*' GROUP BY ref ORDER BY ref").all() as {ref:string;files:number}[];
+    return { repo: repo.name, symbols: (repo.db.prepare("SELECT COUNT(*) c FROM symbols").get() as { c: number }).c,
+      refs: refs.map(x => ({ ...x, revision: revision(repo.db, x.ref), version: available(repo, x.ref) })), budgetMiB: BUDGET_BYTES / 1048576 };
   });
+  // A poll may land on a fresh replica. Attach to the same immutable build and hydrate this replica.
+  if (poolEnabled() && ctx.branch && !active.revision && !jobStatus().some(j => j.repo === r.name && j.ref === ctx.branch)) {
+    ensureIndexed(r.db, r.dir, ctx.branch);
+  }
+  const jobs = jobStatus().filter(j => j.state !== "done");
+  const mirrors = [...repos.values()].map(repo => ({ repo: repo.name, dir: repo.dir, objects: existsSync(`${repo.dir}/objects`) }));
+  const rd = (f: string) => { try { return readFileSync(f, "utf8").slice(0, 600); } catch { return null; } };
+  const lines = [`repo=${active.repo} branch=${active.branch ?? "(unspecified)"} revision=${active.revision ?? "(unavailable)"}${active.version && !active.revision ? ` index_version=${active.version}` : ""}`];
+  for (const repo of details) lines.push(`[${repo.repo}] ${repo.symbols} symbols; refs: ${repo.refs.slice(0, 30).map(x => `${x.ref}@${x.revision ?? "unknown"} (${x.files})`).join(", ")}`);
+  lines.push(`jobs: ${jobs.map(j => `${j.repo}:${j.ref}=${j.phase ?? j.state}${j.error ? ` (${j.error})` : ""}`).join(", ") || "none"}`);
+  lines.push(`idle flush after ${IDLE_TTL_MS / 3600_000} h; index budget: ${BUDGET_BYTES / 1048576} MiB; eviction log: ${evictionLog.slice(-5).join(" | ") || "none"}`);
+  lines.push(`coverage sources: jacoco=${cov.jacocoBase ? "configured" : "not configured"} js=${cov.jsBase || cov.fixtureDir ? "configured" : "not configured"}`);
+  return reply(200, { active, capacity: capacity(), repos: details, mirrors, cloneStatus: rd("/tmp/crm-index/mirror.status"), cloneErr: rd("/tmp/crm-index/clone.err"), jobs }, lines.join("\n"));
+}
 
-  // ---------- diff ----------
-  const range = {
-    base: z.string().optional().describe(`Base branch (default ${BASE}); the diff is merge-base(base, head)..head`),
-    head: z.string().optional().describe("Head branch (default: active branch)"),
-    repo: repoArg,
-  };
-
-  srv.registerTool("diff_symbols", {
-    description: "Ground-truth list of CHANGED symbols (methods/functions/classes) between base and head, derived from git diff hunks mapped onto the symbol index: added / modified / removed / class_level (fields, constants, imports). Use this instead of asking the developer what changed.",
-    inputSchema: range,
-  }, async ({ base, head, repo }) => guard(async () => {
-    const r = pick(repo); if (typeof r === "string") return text(r, true);
-    const b = base ?? BASE, h = active(r, head);
-    await ensureReady(r.db, r.dir, b); await ensureReady(r.db, r.dir, h);
-    return text(formatDiffSymbols(diffSymbols(r.db, r.dir, b, h), 80));
-  }));
-
-
-
-
-
-
+const scope = { repo: z.string().optional(), workspace: z.string().max(8192).optional().describe("Owner-bound handle returned by switch_branch") };
+const branchScope = { ...scope, branch: z.string().optional() };
+const schemas = {
+  search: z.object({ ...branchScope, query: z.string(), limit: z.coerce.number().int().min(1).max(30).optional(), path: z.string().optional() }),
+  symbol: z.object({ ...branchScope, id: z.string(), max_lines: z.coerce.number().int().min(1).max(2000).optional() }),
+  switch: z.object({ ...scope, branch: z.string() }),
+  reindex: z.object(branchScope),
+  diff: z.object({ ...branchScope, base: z.string().optional(), head: z.string().optional(), limit: z.coerce.number().int().min(1).max(2000).optional() }),
+  status: z.object(branchScope),
+  branches: z.object({ ...scope, contains: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).optional() }),
+};
+type Action = keyof typeof schemas;
+async function execute(action: Action, caller: Caller, args: Input) {
+  switch (action) {
+    case "search": return readBranch(caller, args, false);
+    case "symbol": return readBranch(caller, args, true);
+    case "switch": return switchBranch(caller, args, false);
+    case "reindex": return switchBranch(caller, args, true);
+    case "diff": return readDiff(caller, args);
+    case "status": return status(caller, args);
+    case "branches": return branches(caller, args);
+  }
+}
+function buildServer(caller: Caller): McpServer {
+  const srv = new McpServer({ name: "crm-index", version: "0.2.0" });
+  const tools: [Action, string, string][] = [
+    ["search", "get_code_context", "Search Java and JS symbols on the selected branch. Returns ranked cards with IDs and the indexed revision."],
+    ["symbol", "get_symbol", "Read source or a class outline by symbol ID on the selected branch."],
+    ["branches", "list_branches", "List repository branches newest first, optionally filtering by name. Indexed branches are marked."],
+    ["switch", "switch_branch", "Select a repository branch and return a reusable workspace handle. A pending index can be polled with index_status."],
+    ["reindex", "reindex", "Fetch and index the latest revision of the selected branch."],
+    ["status", "index_status", "Show selected workspace, actual indexed revisions, and job progress."],
+    ["diff", "diff_symbols", "List changed methods, functions, and classes between indexed base and head using a merge-base diff."],
+  ];
+  for (const [action, name, description] of tools) {
+    srv.registerTool(name, { description, inputSchema: schemas[action].shape }, async (args: Input) => {
+      try {
+        const result = await execute(action, caller, args);
+        return { ...text(result.message, result.status >= 400), structuredContent: result.data };
+      } catch (e) { return text((e as Error).message.split("\n")[0], true); }
+    });
+  }
   return srv;
 }
 
 // ---- HTTP (streamable MCP) ----
-const transports = new Map<string, StreamableHTTPServerTransport>();
+const transports = new Map<string, { transport: StreamableHTTPServerTransport; user: string }>();
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -199,70 +280,31 @@ const json = (res: import("node:http").ServerResponse, code: number, obj: unknow
   res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(obj));
 };
 
-async function handleApi(path: string, req: IncomingMessage, res: import("node:http").ServerResponse, isAdmin = false): Promise<void> {
-  const q = new URL(req.url ?? "/", "http://x").searchParams;
-  const b = (req.method === "POST" ? ((await readJson(req)) ?? {}) : {}) as Record<string, any>;
-  const get = (k: string) => q.get(k) ?? undefined;
-  const pickRepo = (name?: string): Repo | null => repos.get(name ?? defaultRepo) ?? null;
-
-  if (path === "/api/status" && req.method === "GET") {
-    const out = [];
-    for (const r of repos.values()) {
-      const refs = r.db.prepare("SELECT ref, COUNT(*) files FROM v_manifest WHERE ref NOT LIKE 'commit:%' GROUP BY ref ORDER BY ref").all();
-      out.push({ repo: r.name, symbols: (r.db.prepare("SELECT COUNT(*) c FROM symbols").get() as { c: number }).c, refs, budgetMiB: BUDGET_BYTES / 1048576 });
-    }
-    const rd = (f: string) => { try { return readFileSync(f, "utf8").slice(0, 600); } catch { return null; } };
-    const mirrors = [...repos.values()].map((r) => ({ repo: r.name, dir: r.dir, objects: existsSync(`${r.dir}/objects`) }));
-    return json(res, 200, { ok: true, capacity: capacity(), repos: out, mirrors, cloneStatus: rd("/tmp/crm-index/mirror.status"), cloneErr: rd("/tmp/crm-index/clone.err"), jobs: jobStatus().filter((j) => j.state !== "done") });
+async function handleApi(path: string, req: IncomingMessage, res: import("node:http").ServerResponse, user: string): Promise<void> {
+  const q = Object.fromEntries(new URL(req.url ?? "/", "http://x").searchParams);
+  const b = (req.method === "POST" ? ((await readJson(req)) ?? {}) : {}) as Record<string, unknown>;
+  const route = path.slice("/api/".length);
+  if (Object.hasOwn(schemas, route)) {
+    const action = route as Action;
+    const readable = action !== "switch" && action !== "reindex";
+    if (req.method !== "POST" && !(req.method === "GET" && readable)) return json(res, 405, { ok: false, error: "method not allowed" });
+    const args = schemas[action].safeParse({ ...q, ...b });
+    if (!args.success) return json(res, 400, { ok: false, error: args.error.issues.map(i => i.path.join(".") + " " + i.message).join(", ") });
+    try {
+      const result = await execute(action, { user }, args.data);
+      // Older clients treat a successful read as complete. Keep their retryable conflict response.
+      if (result.status === 202 && (action === "search" || action === "symbol" || action === "diff")) {
+        return json(res, 409, { ...result.data, ok: false, error: result.message, hint: "Check index_status and retry" });
+      }
+      return json(res, result.status, result.data);
+    } catch (e) { return json(res, e instanceof RequestError ? e.status : 503, { ok: false, error: (e as Error).message.split("\n")[0] }); }
   }
-
-  if (path === "/api/branches" && req.method === "GET") {
-    const r = pickRepo(get("repo")); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
-    const x = listBranches(r.db, r.dir, get("contains") ?? "", Number(get("limit") ?? 25));
-    return json(res, 200, { ok: true, total: x.total, matched: x.matched, branches: x.branches });
-  }
-
-  if (path === "/api/search" && req.method === "POST") {
-    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
-    const branch = b.branch ?? BASE;
-    if (!isIndexed(r.db, branch)) return json(res, 409, { ok: false, error: `branch "${branch}" not indexed`, hint: "POST /api/switch first" });
-    touchRef(r.db, branch);
-    const { cards, mode } = searchSymbols(r.db, branch, String(b.query ?? ""), Math.min(Number(b.limit ?? 8), 30), b.path);
-    return json(res, 200, { ok: true, repo: r.name, branch, mode, cards, text: formatCards(cards), indexing: isIndexing(r.dir, branch) });
-  }
-
-  if (path === "/api/symbol" && req.method === "POST") {
-    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
-    const x = getSymbol(r.db, r.dir, String(b.id ?? ""), b.branch ?? BASE, Math.min(Number(b.max_lines ?? 150), 2000));
-    return json(res, x.ok ? 200 : 404, { ok: x.ok, text: x.text });
-  }
-
-  if (path === "/api/switch" && req.method === "POST") {
-    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
-    const branch = String(b.branch ?? "");
-    if (!branch) return json(res, 400, { ok: false, error: "branch required" });
-    if (isIndexed(r.db, branch) && !isIndexing(r.dir, branch)) return json(res, 200, { ok: true, status: "indexed", branch });
-    const job = ensureIndexed(r.db, r.dir, branch);
-    const done = await waitFor(job, WAIT_MS);
-    if (done && job.state === "error") return json(res, 500, { ok: false, error: job.error });
-    if (!done) return json(res, 202, { ok: true, status: "indexing", branch, progress: job.progress ?? null });
-    return json(res, 200, { ok: true, status: "indexed", branch, report: job.report });
-  }
-
-  if (path === "/api/diff" && req.method === "POST") {
-    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
-    const base = b.base ?? BASE, head = b.head;
-    if (!head) return json(res, 400, { ok: false, error: "head required" });
-    await ensureReady(r.db, r.dir, base); await ensureReady(r.db, r.dir, head);
-    const d = diffSymbols(r.db, r.dir, base, head);
-    return json(res, 200, { ok: true, base, head, symbols: d.symbols, files: d.files.map((f) => f.path), text: formatDiffSymbols(d, Number(b.limit ?? 200)) });
-  }
-
+  const isAdmin = user === "admin";
   if (path === "/api/admin/snapshot" && req.method === "POST") {
     if (!isAdmin) return json(res, 403, { ok: false, error: "admin only" });
     if (!snapshotEnabled()) return json(res, 503, { ok: false, error: "SNAPSHOT_URL/SNAPSHOT_KEY not configured" });
-    const r = pickRepo(b.repo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
-    if (!isIndexed(r.db, BASE)) return json(res, 409, { ok: false, error: "master not indexed yet" });
+    const r = repos.get(typeof b.repo === "string" ? b.repo : defaultRepo); if (!r) return json(res, 404, { ok: false, error: "unknown repo" });
+    if (!available(r, BASE)) return json(res, 409, { ok: false, error: "master not indexed yet" });
     try { return json(res, 200, { snapshot: await snapshotInWorker(r.db, r.name) }); } catch (e) { return json(res, 500, { ok: false, error: (e as Error).message }); }
   }
 
@@ -295,7 +337,7 @@ const http = createServer(async (req, res) => {
       }
       if (path === "/api/whoami") { json(res, 200, { ok: true, user: user || "anonymous" }); return; }
       if (user && user !== "admin") console.error(`[api] ${user} ${req.method} ${path}`);
-      await handleApi(path, req, res, user === "admin");
+      await handleApi(path, req, res, user);
       return;
     }
     if (req.url?.split("?")[0] !== "/mcp") { res.writeHead(404).end(); return; }
@@ -304,12 +346,13 @@ const http = createServer(async (req, res) => {
       res.writeHead(401, { "content-type": "application/json", "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl()}"` }).end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: send a personal key as Bearer" }, id: null }));
       return;
     }
+    const user = mcpWho && "user" in mcpWho ? mcpWho.user : "";
     // Default (MCP_STATEFUL=1 to disable): no sessions. Every request is self-contained and answered as plain JSON, which avoids the
     // session path that the AppSail gateway mishandles (duplicate empty 400s on /mcp).
     if (process.env.MCP_STATEFUL !== "1") {
       const body = req.method === "POST" ? await readJson(req) : undefined;
       if (req.method !== "POST") { res.writeHead(405, { allow: "POST" }).end(); return; }
-      const srv = buildServer({ repo: defaultRepo, branches: {} });
+      const srv = buildServer({ user });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => { transport.close(); srv.close(); });
       await srv.connect(transport);
@@ -318,7 +361,9 @@ const http = createServer(async (req, res) => {
     }
     const sid = req.headers["mcp-session-id"] as string | undefined;
     const body = req.method === "POST" ? await readJson(req) : undefined;
-    let t = sid ? transports.get(sid) : undefined;
+    const entry = sid ? transports.get(sid) : undefined;
+    if (entry && entry.user !== user) { json(res, 403, { ok: false, error: "session belongs to a different caller" }); return; }
+    let t = entry?.transport;
     if (!t) {
       if (sid || req.method !== "POST" || !isInitializeRequest(body)) {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "No valid session; send initialize first" }, id: null }));
@@ -326,10 +371,10 @@ const http = createServer(async (req, res) => {
       }
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (id) => { transports.set(id, transport); },
+        onsessioninitialized: (id) => { transports.set(id, { transport, user }); },
       });
       transport.onclose = () => { if (transport.sessionId) transports.delete(transport.sessionId); };
-      await buildServer({ repo: defaultRepo, branches: {} }).connect(transport);
+      await buildServer({ user, session: { branches: new Map() } }).connect(transport);
       t = transport;
     }
     await t.handleRequest(req, res, body);
@@ -341,9 +386,9 @@ const http = createServer(async (req, res) => {
 
 http.listen(PORT, () => {
   console.error(`crm-index MCP on :${PORT}/mcp  repos=${[...repos.values()].map((r) => `${r.name}=${r.dir}`).join(",")}  data=${DATA}`);
-  for (const r of repos.values()) if (!isIndexed(r.db, BASE)) { console.error(`${r.name}: master not indexed, starting initial index`); ensureIndexed(r.db, r.dir, BASE, { fetch: false }); }
+  for (const r of repos.values()) if (!available(r, BASE)) { console.error(`${r.name}: master not indexed, starting initial index`); ensureIndexed(r.db, r.dir, BASE, { fetch: false }); }
   // persist LRU clock every 30 s (request path only touches memory)
-  setInterval(() => { for (const r of repos.values()) persistTouches(r.db); }, 30_000).unref();
+  setInterval(() => { if (poolEnabled() && capacity().pending) return; for (const r of repos.values()) persistTouches(r.db); }, 30_000).unref();
   // idle flush: every SWEEP_MIN minutes drop branches unused for IDLE_TTL_HOURS (default 48 h); master is always kept
   const sweepMs = Number(process.env.SWEEP_MIN ?? 60) * 60_000;
   setInterval(() => { for (const r of repos.values()) { const d = flushIdle(r.db, r.dir); if (d.length) console.error(`${r.name}: flushed idle ${d.join(", ")}`); } }, sweepMs).unref();
@@ -351,19 +396,18 @@ http.listen(PORT, () => {
   // mirror may still be cloning at boot: retry master indexing until it exists (no-op once master is indexed)
   setInterval(() => {
     for (const r of repos.values()) {
-      if (!isIndexed(r.db, BASE) && existsSync(`${r.dir}/objects`) && !isIndexing(r.dir, BASE)) {
+      if (!available(r, BASE) && existsSync(`${r.dir}/objects`) && !isIndexing(r.dir, BASE)) {
         console.error(`${r.name}: mirror present, indexing master`);
         ensureIndexed(r.db, r.dir, BASE, { fetch: false });
       }
     }
   }, 30_000).unref();
   // After a snapshot restore the index is usable at once but stale: once the mirror exists, refresh master from git once.
-  let refreshedAfterBoot = false;
+  const refreshedAfterBoot = new Set<string>();
   setInterval(() => {
-    if (refreshedAfterBoot) return;
     for (const r of repos.values()) {
-      if (isIndexed(r.db, BASE) && existsSync(`${r.dir}/objects`) && !isIndexing(r.dir, BASE)) {
-        refreshedAfterBoot = true;
+      if (!refreshedAfterBoot.has(r.name) && available(r, BASE) && existsSync(`${r.dir}/objects`) && !isIndexing(r.dir, BASE)) {
+        refreshedAfterBoot.add(r.name);
         console.error(`${r.name}: mirror ready, refreshing master`);
         ensureIndexed(r.db, r.dir, BASE, { refresh: true });
       }
@@ -376,7 +420,7 @@ http.listen(PORT, () => {
     setInterval(async () => {
       if (snapping) return;
       for (const r of repos.values()) {
-        if (!isIndexed(r.db, BASE) || isIndexing(r.dir, BASE)) continue;
+        if (!available(r, BASE) || isIndexing(r.dir, BASE)) continue;
         const at = Number((r.db.prepare("SELECT v FROM meta WHERE k='snapshot_at'").get() as { v: string } | undefined)?.v ?? 0);
         if (Date.now() - at < everyMs) continue;
         snapping = true;
@@ -391,5 +435,5 @@ http.listen(PORT, () => {
   }
   // PRELOAD_REFS=refs... (comma-separated branch names) are indexed in the background at boot, e.g. the team's default branches
   const preload = (process.env.PRELOAD_REFS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-  for (const r of repos.values()) for (const b of preload) if (!isIndexed(r.db, b)) { console.error(`${r.name}: preloading ${b}`); ensureIndexed(r.db, r.dir, b); }
+  for (const r of repos.values()) for (const b of preload) if (!available(r, b)) { console.error(`${r.name}: preloading ${b}`); ensureIndexed(r.db, r.dir, b); }
 });

@@ -9,24 +9,27 @@ export function usedBytes(db: Db): number {
 }
 
 // Request path never writes: use times live in memory and are persisted by persistTouches() on a timer.
-const pendingTouch = new Map<string, number>();
+const pendingTouch = new WeakMap<Db, Map<string, number>>();
 /** Record that a ref was used now (LRU clock). In-memory only; no database lock on the request path. */
-export function touchRef(_db: Db, ref: string): void {
-  pendingTouch.set(ref, Date.now());
+export function touchRef(db: Db, ref: string): void {
+  let touches = pendingTouch.get(db);
+  if (!touches) { touches = new Map(); pendingTouch.set(db, touches); }
+  touches.set(ref, Date.now());
 }
 /** Write pending use times to meta. Called by the server on a timer and before a flush sweep. */
 export function persistTouches(db: Db): number {
-  if (!pendingTouch.size) return 0;
+  const touches = pendingTouch.get(db);
+  if (!touches?.size) return 0;
   const ins = db.prepare("INSERT OR REPLACE INTO meta(k,v) VALUES (?,?)");
-  const n = pendingTouch.size;
-  db.transaction(() => { for (const [ref, t] of pendingTouch) ins.run(`used:${ref}`, String(t)); })();
-  pendingTouch.clear();
+  const n = touches.size;
+  db.transaction(() => { for (const [ref, t] of touches) ins.run(`used:${ref}`, String(t)); })();
+  touches.clear();
   return n;
 }
 
 export function lastUsed(db: Db, ref: string): number {
   const r = db.prepare("SELECT v FROM meta WHERE k=?").get(`used:${ref}`) as { v: string } | undefined;
-  return Math.max(r ? Number(r.v) : 0, pendingTouch.get(ref) ?? 0);
+  return Math.max(r ? Number(r.v) : 0, pendingTouch.get(db)?.get(ref) ?? 0);
 }
 
 /** Remove one ref's manifest, then garbage-collect symbols/blobs/paths no ref references any more. */
@@ -36,7 +39,7 @@ export function dropRef(db: Db, ref: string): { symbols: number; blobs: number; 
   return db.transaction(() => {
     db.prepare("DELETE FROM manifest WHERE ref_id=?").run(rid);
     db.prepare("DELETE FROM refs WHERE id=?").run(rid);
-    db.prepare("DELETE FROM meta WHERE k IN (?,?)").run(`indexed:${ref}`, `used:${ref}`);
+    db.prepare("DELETE FROM meta WHERE k IN (?,?,?)").run(`indexed:${ref}`, `used:${ref}`, `revision:${ref}`);
     // symbols whose blob no ref uses any more (uses manifest_blob index)
     const dead = db.prepare("SELECT s.id FROM symbols s WHERE NOT EXISTS (SELECT 1 FROM manifest m WHERE m.blob_id = s.blob_id)").all() as { id: number }[];
     const delFts = db.prepare("DELETE FROM symbols_fts WHERE rowid = ?");
@@ -44,7 +47,7 @@ export function dropRef(db: Db, ref: string): { symbols: number; blobs: number; 
     for (const { id } of dead) { delFts.run(id); delSym.run(id); }
     db.prepare("DELETE FROM bodies WHERE NOT EXISTS (SELECT 1 FROM manifest m WHERE m.blob_id = bodies.blob_id)").run();
     const blobs = db.prepare("DELETE FROM blobs WHERE NOT EXISTS (SELECT 1 FROM manifest m WHERE m.blob_id = blobs.id)").run().changes;
-    const paths = db.prepare("DELETE FROM paths WHERE NOT EXISTS (SELECT 1 FROM manifest m WHERE m.path_id = paths.id)").run().changes;
+    const paths = db.prepare("DELETE FROM paths WHERE id IN (SELECT id FROM paths EXCEPT SELECT path_id FROM manifest)").run().changes;
     return { symbols: dead.length, blobs, paths };
   })();
 }
@@ -56,7 +59,7 @@ export function dropRef(db: Db, ref: string): { symbols: number; blobs: number; 
 export function enforceBudget(db: Db, budgetBytes: number, keep: Set<string>, base = "master"): string[] {
   const dropped: string[] = [];
   while (usedBytes(db) > budgetBytes) {
-    const refs = (db.prepare("SELECT name FROM refs").all() as { name: string }[]).map((r) => r.name)
+    const refs = (db.prepare("SELECT name FROM refs WHERE name NOT GLOB ':stage:*'").all() as { name: string }[]).map((r) => r.name)
       .filter((n) => n !== base && !keep.has(n));
     if (!refs.length) break;
     refs.sort((a, b) => lastUsed(db, a) - lastUsed(db, b));
@@ -73,7 +76,7 @@ export function enforceBudget(db: Db, budgetBytes: number, keep: Set<string>, ba
  */
 export function sweepIdle(db: Db, maxIdleMs: number, keep: Set<string>, base = "master", now = Date.now()): string[] {
   persistTouches(db);
-  const names = (db.prepare("SELECT name FROM refs").all() as { name: string }[]).map((r) => r.name);
+  const names = (db.prepare("SELECT name FROM refs WHERE name NOT GLOB ':stage:*'").all() as { name: string }[]).map((r) => r.name);
   const dropped: string[] = [];
   for (const n of names) {
     if (n === base || keep.has(n)) continue;

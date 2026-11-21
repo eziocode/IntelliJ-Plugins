@@ -2,7 +2,9 @@
   "functions": {
     "targets": [
       "crm_index_auth",
-      "crm_index_snapshot"
+      "crm_index_snapshot",
+      "crm_index_build",
+      "crm_index_jobs"
     ],
     "ignore": [],
     "source": "functions"

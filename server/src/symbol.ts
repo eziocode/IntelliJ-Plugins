@@ -8,14 +8,18 @@ const TYPE_KINDS = new Set(["class", "interface", "enum", "record", "annotation_
 interface SymRow { id: number; blob: string; kind: string; parent: string; name: string; sl: number; el: number; sig: string }
 
 export function getSymbol(db: Db, repo: string, id: string, ref: string, maxLines = 150): { ok: boolean; text: string } {
-  const p = parseId(id);
-  if (!p) return { ok: false, text: `bad id "${id}"` };
-  const s0 = db.prepare("SELECT s.id, s.blob_id, b.sha AS blob, s.kind, s.parent, s.name, s.sl, s.el, s.sig FROM symbols s JOIN blobs b ON b.id = s.blob_id WHERE s.id=?").get(p.rowid) as (SymRow & { blob_id: number }) | undefined;
-  if (!s0 || !s0.blob.startsWith(p.blob5)) return { ok: false, text: `stale id "${id}": re-run get_code_context` };
+  const stable = /^b1\.([0-9a-f]{40})\.([0-9a-z]{1,8})$/.exec(id);
+  const legacy = stable ? null : parseId(id);
+  if (!stable && !legacy) return { ok: false, text: `bad id "${id}"` };
+  const fields = "SELECT s.id, s.blob_id, b.sha AS blob, s.kind, s.parent, s.name, s.sl, s.el, s.sig FROM symbols s JOIN blobs b ON b.id = s.blob_id";
+  const s0 = (stable
+    ? db.prepare(fields + " WHERE b.sha=? ORDER BY s.id LIMIT 1 OFFSET ?").get(stable[1], parseInt(stable[2], 36))
+    : db.prepare(fields + " WHERE s.id=?").get(legacy!.rowid)) as (SymRow & { blob_id: number }) | undefined;
+  if (!s0 || (legacy && !s0.blob.startsWith(legacy.blob5))) return { ok: false, text: `stale id "${id}": re-run get_code_context` };
   const s = { ...s0, sig: unpackText(s0.sig) };
-  const pathRow = (db.prepare("SELECT path FROM v_manifest WHERE blob_id=? AND ref=? LIMIT 1").get(s.blob_id, ref)
-    ?? db.prepare("SELECT path FROM v_manifest WHERE blob_id=? LIMIT 1").get(s.blob_id)) as { path: string } | undefined;
-  const path = pathRow?.path ?? "(unknown path)";
+  const pathRow = db.prepare("SELECT path FROM v_manifest WHERE blob_id=? AND ref=? ORDER BY path LIMIT 1").get(s.blob_id, ref) as { path: string } | undefined;
+  if (!pathRow) return { ok: false, text: `id "${id}" is absent from branch "${ref}"; re-run get_code_context` };
+  const path = pathRow.path;
   const head = `${s.kind} ${s.parent ? s.parent + "." : ""}${s.name}  ${path}:${s.sl}-${s.el}`;
 
   if (TYPE_KINDS.has(s.kind)) {
