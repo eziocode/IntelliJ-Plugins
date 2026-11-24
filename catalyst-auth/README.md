@@ -8,6 +8,12 @@ function reads the user (`getCurrentUser`), requires an allowed email domain, mi
 (same format as `server/src/auth.ts`) and redirects to the shim's `127.0.0.1` callback. If not signed in, it
 shows a "Sign in required" page linking to Catalyst's hosted login.
 
+MCP OAuth (Claude Code `/mcp` Authenticate, Cursor, VS Code): the crmindex server's `/oauth/authorize` sends the
+browser here with `return=https://crmindex.development.catalystappsail.in/oauth/return?ctx=...`. The function
+accepts only that exact return prefix, then redirects to it with `token` (session), `state` and `email`. The
+server then issues its own single-use code and the per-person key. The `port`/`state` check is skipped for this
+path.
+
 ## Deploy
 
 ```bash
@@ -24,6 +30,10 @@ remove it again:
 catalyst deploy --only functions:crm_index_auth -ni
 ```
 
+Redeploys can wipe function env vars. After any deploy, check that `SESSION_SECRET` is still set in the Catalyst
+console (Functions → `crm_index_auth` → Environment). Symptom when missing: sign-in returns 503 "session secret is
+not set on this function". Keep the secret in the console, not in the repo config.
+
 Function URL: `https://<project-domain>/server/crm_index_auth/execute`. Set it as `LOGIN_URL` on the
 crmindex AppSail so the server tells clients where to sign in.
 
@@ -32,9 +42,14 @@ crmindex AppSail so the server tells clients where to sign in.
 - Catalyst sign-in applies to project **app users**; public signup is on in this project, so the function's
   email-domain check is what keeps outsiders out. Any `@zohocorp.com` account is accepted, not only people with
   repo access.
-- First-ever use for someone without a Catalyst session: the function shows a sign-in page; after signing in
-  (Catalyst sends them to the project's app), open the sign-in link again or re-run the tool. Tested only with an
-  already signed-in browser.
+- First-ever use for someone without a Catalyst session: the function renders Catalyst's embedded login on its
+  own page with `service_url` pointing back at itself. Hosted login would land on the project's post-login page
+  (`qa_automation_audit.html` on CrmQaAutomation), which is shared with another app and has no per-app setting.
+  Catalyst keeps only the first query param of `service_url`, so the original query travels base64url-packed in
+  `r`. The page also polls `?check=1` and continues once a session exists. If the embedded SDK fails to load, a
+  button opens hosted login in a popup instead.
+- Redeploys wipe `SESSION_SECRET`. Re-set it after every deploy (console, or temporarily in
+  `catalyst-config.json` for the deploy only).
 
 ## Snapshot signer: `crm_index_snapshot`
 
